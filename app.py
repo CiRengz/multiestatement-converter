@@ -181,7 +181,7 @@ if uploaded_files:
                 if not df.empty:
                     df['Tanggal'] = df['Tanggal'].replace(r'^\s*$', pd.NA, regex=True).ffill()
                     df['Tanggal'] = df['Tanggal'].apply(lambda x: f"{str(x).strip()}/{pdf_year}" if pd.notna(x) and len(str(x).strip()) == 5 else x)
-                    df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%d/%m/%Y', errors='ignore').dt.strftime('%d/%m/%Y')
+                    df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%d/%m/%Y', errors='coerce').dt.strftime('%d/%m/%Y').fillna("")
                     
                     saldo_terhitung = []
                     current_saldo = 0.0
