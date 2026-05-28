@@ -19,11 +19,11 @@ def check_password():
 
     if "password_correct" not in st.session_state:
         st.title("🔒 Akses Terbatas")
-        st.text_input("Masukkan kata sandi tim untuk menggunakan aplikasi ini:", type="password", on_change=password_entered, key="password")
+        st.text_input("Masukkan kata sandi untuk menggunakan aplikasi ini:", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
         st.title("🔒 Akses Terbatas")
-        st.text_input("Masukkan kata sandi tim untuk menggunakan aplikasi ini:", type="password", on_change=password_entered, key="password")
+        st.text_input("Masukkan kata sandi untuk menggunakan aplikasi ini:", type="password", on_change=password_entered, key="password")
         st.error("❌ Kata sandi salah. Silakan coba lagi.")
         return False
     return True
@@ -31,7 +31,7 @@ def check_password():
 # --- APLIKASI UTAMA (Hanya Terbuka Jika Sandi Benar) ---
 if check_password():
     st.title("🏦 BCA e-Statement to Excel Converter")
-    st.write("Unggah file PDF e-Statement BCA secara massal. Sistem akan mengekstrak transaksi, memisahkan bulan ke dalam sheet, dan mengkalkulasi saldo secara otomatis.")
+    st.write("Unggah file PDF e-Statement BCA secara satuan atau massal. Sistem akan mengekstrak transaksi, memisahkan bulan ke dalam sheet, dan mengkalkulasi saldo secara otomatis.")
 
     # Fungsi bantuan
     def is_date(text):
@@ -56,8 +56,8 @@ if check_password():
     uploaded_files = st.file_uploader("Pilih file PDF e-Statement BCA", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
-        if st.button("🚀 Proses Data Sekarang"):
-            with st.spinner("Sedang membaca PDF dan mengkalkulasi saldo secara presisi..."):
+        if st.button("🚀 GASKEUN Proses Data Sekarang Bozkuh!"):
+            with st.spinner("Sedang membaca PDF dan mengkalkulasi saldo secara super duper presisi (alay dikit gpp lah ya...)"):
                 sheet_data = {}
                 global_norek = "UNKNOWN"
                 global_year = "YYYY"
@@ -272,7 +272,7 @@ if check_password():
                     writer.close()
                     processed_data = output.getvalue()
                     
-                    st.success(f"✅ Data berhasil diekstrak menjadi {len(sorted_sheets)} sheet bulanan.")
+                    st.success(f"✅ Data berhasil diekstrak menjadi {len(sorted_sheets)} sheet bulanan, suksme.")
                     
                     st.download_button(
                         label="📥 Unduh File Excel Sekarang",
