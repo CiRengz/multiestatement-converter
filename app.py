@@ -30,7 +30,7 @@ def check_password():
 
 # --- APLIKASI UTAMA (Hanya Terbuka Jika Sandi Benar) ---
 if check_password():
-    st.title("🏦 MANDIRI e-Statement to Excel Converter")
+    st.title("🏦 BCA e-Statement to Excel Converter")
     st.write("Unggah file PDF e-Statement BCA secara satuan atau massal. Sistem akan mengekstrak transaksi, memisahkan bulan ke dalam sheet, dan mengkalkulasi saldo secara otomatis.")
 
     # Fungsi bantuan
@@ -56,8 +56,8 @@ if check_password():
     uploaded_files = st.file_uploader("Pilih file PDF e-Statement BCA", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
-        if st.button("🚀 GASKEUN Proses Data Sekarang Bozkuh!"):
-            with st.spinner("Sedang membaca PDF dan mengkalkulasi saldo secara super duper presisi (alay dikit gpp lah ya...)"):
+        if st.button("🚀 Proses Data Sekarang"):
+            with st.spinner("Sedang membaca PDF dan mengkalkulasi saldo secara presisi"):
                 sheet_data = {}
                 global_norek = "UNKNOWN"
                 global_year = "YYYY"
