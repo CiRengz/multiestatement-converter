@@ -423,7 +423,9 @@ if check_password():
         period = "UNKNOWN"
 
         def permata_money(text):
-            return bool(re.match(r'^[\d,]+\.\d{2}$', text.strip()))
+            """Check if text is a money value - more lenient pattern"""
+            text = text.strip()
+            return bool(re.match(r'^-?[\d,]+\.\d{2}$', text))
 
         def dedup_word(word):
             return deduplicate_chars(word.get('text', '')).strip()
@@ -458,24 +460,27 @@ if check_password():
                     header_text = " ".join(header_buffer)
                     if 'No.' in header_text and 'Post Date' in header_text and 'Description' in header_text:
                         is_table = True
+                        # Dynamically detect column positions from header
                         for header_line in header_line_buffer:
                             for word in header_line:
-                                if word['text'] == 'Description':
+                                wtext = word['text'].lower()
+                                if 'description' in wtext:
                                     x_desc = word['x0'] - 5
-                                elif word['text'] == 'Customer':
+                                elif 'customer' in wtext:
                                     x_customer = word['x0'] - 5
-                                elif word['text'] == 'Debit':
+                                elif wtext == 'debit':
                                     x_debit = word['x0'] - 5
-                                elif word['text'] == 'Credit':
+                                elif wtext == 'credit':
                                     x_credit = word['x0'] - 5
                         for word in line:
-                            if word['text'] == 'Description':
+                            wtext = word['text'].lower()
+                            if 'description' in wtext:
                                 x_desc = word['x0'] - 5
-                            elif word['text'] == 'Customer':
+                            elif 'customer' in wtext:
                                 x_customer = word['x0'] - 5
-                            elif word['text'] == 'Debit':
+                            elif wtext == 'debit':
                                 x_debit = word['x0'] - 5
-                            elif word['text'] == 'Credit':
+                            elif wtext == 'credit':
                                 x_credit = word['x0'] - 5
                         header_buffer = []
                         header_line_buffer = []
@@ -484,55 +489,89 @@ if check_password():
                     if not is_table:
                         continue
 
+                    # Skip summary/footer lines
                     if re.search(r'(Opening Ledger|Closing Ledger|Ineffective Balance|Hold Amount|Loan Facility|Record not found|Total|Ledger Balance per)', line_text, re.IGNORECASE):
                         if current_row:
                             positioned_rows.append(current_row)
                             current_row = None
                         continue
 
+                    # Try to match transaction start line
                     m = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)', line_text)
                     if not m:
+                        # This is a continuation line - append to current row's description
                         if current_row:
-                            continuation_words = []
+                            # Collect all words that are not money values and are in description area
+                            continuation_parts = []
+                            has_money_in_line = any(permata_money(w['text']) for w in line)
                             for w in line:
-                                if permata_money(w['text']):
+                                wtext = w['text'].strip()
+                                if not wtext:
                                     continue
-                                if w['x0'] >= x_desc and w['x0'] < x_debit:
-                                    continuation_words.append(w['text'])
-                                elif w['x0'] >= x_desc and not any(permata_money(item['text']) for item in line):
-                                    continuation_words.append(w['text'])
-                            continuation = " ".join(continuation_words).strip()
-                            if continuation and not re.search(r'^(No\.|Post Date|Description|Debit|Credit)', continuation, re.IGNORECASE):
+                                # Skip if it's a money value (might be misplaced debit/credit)
+                                if permata_money(wtext):
+                                    continue
+                                # Skip if it looks like a header or footer
+                                if re.search(r'^(No\.|Post Date|Description|Debit|Credit|\d+)$', wtext, re.IGNORECASE):
+                                    continue
+                                continuation_parts.append(wtext)
+                            
+                            if continuation_parts:
+                                continuation = " ".join(continuation_parts)
                                 current_row['Description'] = f"{current_row['Description']} {continuation}".strip()
                         continue
 
+                    # This is a new transaction line
                     if current_row:
                         positioned_rows.append(current_row)
 
+                    # Find all money values in this line
                     money_words = sorted([w for w in line if permata_money(w['text'])], key=lambda item: item['x0'])
-                    debit_word = None
-                    credit_word = None
+                    
+                    debit_val = ''
+                    credit_val = ''
+                    
                     if len(money_words) >= 2:
-                        debit_word = money_words[-2]
-                        credit_word = money_words[-1]
+                        # Two money values: first is debit, second is credit
+                        debit_val = money_words[-2]['text']
+                        credit_val = money_words[-1]['text']
                     elif len(money_words) == 1:
+                        # One money value: determine if debit or credit based on position
                         amount_word = money_words[0]
-                        if amount_word['x0'] >= x_credit:
-                            credit_word = amount_word
+                        mid_point = (x_debit + x_credit) / 2
+                        if amount_word['x0'] >= mid_point:
+                            credit_val = amount_word['text']
                         else:
-                            debit_word = amount_word
-
-                    customer_ref_words = []
+                            debit_val = amount_word['text']
+                    
+                    # Also check for money values that might be in the text (after description parsing)
+                    # Collect description words (everything between x_desc and the amount columns)
+                    amount_start_x = min(x_debit, x_credit)
                     desc_words = []
-                    amount_start_x = debit_word['x0'] if debit_word else (credit_word['x0'] if credit_word else x_debit)
-                    for word in line:
-                        same_as_debit = debit_word and word['text'] == debit_word['text'] and abs(word['x0'] - debit_word['x0']) < 1
-                        same_as_credit = credit_word and word['text'] == credit_word['text'] and abs(word['x0'] - credit_word['x0']) < 1
-                        if x_customer <= word['x0'] < x_desc and not same_as_debit and not same_as_credit:
-                            customer_ref_words.append(word['text'])
-                        elif x_desc <= word['x0'] < amount_start_x and not same_as_debit and not same_as_credit:
-                            desc_words.append(word['text'])
-
+                    customer_ref_words = []
+                    
+                    for w in line:
+                        wtext = w['text'].strip()
+                        x = w['x0']
+                        
+                        # Skip money values (already handled)
+                        if permata_money(wtext):
+                            continue
+                        
+                        # Skip transaction start pattern parts
+                        if re.match(r'^\d+$', wtext) and x < x_desc:
+                            continue
+                        if re.match(r'^\d{2}-[A-Za-z]+-\d{4}$', wtext) and x < x_desc:
+                            continue
+                        if re.match(r'^[A-Z0-9]+$', wtext) and len(wtext) <= 6 and x < x_desc:
+                            continue
+                        
+                        # Categorize by position
+                        if x_customer <= x < x_desc:
+                            customer_ref_words.append(wtext)
+                        elif x_desc <= x < amount_start_x:
+                            desc_words.append(wtext)
+                    
                     current_row = {
                         'No': m.group(1),
                         'Post Date': m.group(2),
@@ -542,8 +581,8 @@ if check_password():
                         'Ref No': m.group(6),
                         'Customer Ref No': " ".join(customer_ref_words).strip(),
                         'Description': " ".join(desc_words).strip(),
-                        'Debit': clean_money(debit_word['text']) if debit_word else '',
-                        'Credit': clean_money(credit_word['text']) if credit_word else ''
+                        'Debit': clean_money(debit_val) if debit_val else '',
+                        'Credit': clean_money(credit_val) if credit_val else ''
                     }
 
             if current_row:
