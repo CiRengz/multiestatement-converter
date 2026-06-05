@@ -422,6 +422,116 @@ if check_password():
         account_name = "UNKNOWN"
         period = "UNKNOWN"
 
+        def permata_money(text):
+            return bool(re.match(r'^[\d,]+\.\d{2}$', text.strip()))
+
+        def dedup_word(word):
+            return deduplicate_chars(word.get('text', '')).strip()
+
+        def parse_permata_by_position(pdf):
+            positioned_rows = []
+            current_row = None
+            is_table = False
+            x_desc, x_debit, x_credit = 300, 650, 730
+
+            for page in pdf.pages:
+                words = page.extract_words()
+                if not words:
+                    continue
+
+                clean_words = []
+                for word in words:
+                    clean_word = dict(word)
+                    clean_word['text'] = dedup_word(word)
+                    if clean_word['text']:
+                        clean_words.append(clean_word)
+
+                for line in group_words_into_lines(clean_words, y_tolerance=4):
+                    line_text = " ".join([w['text'] for w in line]).strip()
+                    if not line_text:
+                        continue
+
+                    if 'No.' in line_text and 'Post Date' in line_text and 'Description' in line_text:
+                        is_table = True
+                        for word in line:
+                            if word['text'] == 'Description':
+                                x_desc = word['x0'] - 5
+                            elif word['text'] == 'Debit':
+                                x_debit = word['x0'] - 5
+                            elif word['text'] == 'Credit':
+                                x_credit = word['x0'] - 5
+                        continue
+
+                    if not is_table:
+                        continue
+
+                    if re.search(r'(Opening Ledger|Closing Ledger|Ineffective Balance|Hold Amount|Loan Facility|Record not found|Total|Ledger Balance per)', line_text, re.IGNORECASE):
+                        if current_row:
+                            positioned_rows.append(current_row)
+                            current_row = None
+                        continue
+
+                    m = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)', line_text)
+                    if not m:
+                        if current_row:
+                            continuation = " ".join([
+                                w['text'] for w in line
+                                if x_desc <= w['x0'] < x_debit and not permata_money(w['text'])
+                            ]).strip()
+                            if continuation and not re.search(r'^(No\.|Post Date|Description|Debit|Credit)', continuation, re.IGNORECASE):
+                                current_row['Description'] = f"{current_row['Description']} {continuation}".strip()
+                        continue
+
+                    if current_row:
+                        positioned_rows.append(current_row)
+
+                    money_words = [w for w in line if permata_money(w['text'])]
+                    debit_word = next((w for w in money_words if x_debit <= w['x0'] < x_credit), None)
+                    credit_word = next((w for w in money_words if w['x0'] >= x_credit), None)
+
+                    desc_words = []
+                    for word in line:
+                        same_as_debit = debit_word and word['text'] == debit_word['text'] and abs(word['x0'] - debit_word['x0']) < 1
+                        same_as_credit = credit_word and word['text'] == credit_word['text'] and abs(word['x0'] - credit_word['x0']) < 1
+                        if x_desc <= word['x0'] < x_debit and not same_as_debit and not same_as_credit:
+                            desc_words.append(word['text'])
+
+                    current_row = {
+                        'No': m.group(1),
+                        'Post Date': m.group(2),
+                        'Eff Date': m.group(3),
+                        'Transaction Code': m.group(4),
+                        'Cheque Number': m.group(5),
+                        'Ref No': m.group(6),
+                        'Description': " ".join(desc_words).strip(),
+                        'Debit': clean_money(debit_word['text']) if debit_word else '',
+                        'Credit': clean_money(credit_word['text']) if credit_word else ''
+                    }
+
+            if current_row:
+                positioned_rows.append(current_row)
+
+            return positioned_rows
+
+        def split_permata_amounts_from_description(row):
+            desc = row.get('Description', '').strip()
+            money_matches = list(re.finditer(r'[\d,]+\.\d{2}', desc))
+            if not money_matches:
+                return row
+
+            amounts_to_remove = []
+            if row.get('Credit') == '' and len(money_matches) >= 1:
+                row['Credit'] = clean_money(money_matches[-1].group(0))
+                amounts_to_remove.append(money_matches[-1])
+            if row.get('Debit') == '' and len(money_matches) >= 2:
+                row['Debit'] = clean_money(money_matches[-2].group(0))
+                amounts_to_remove.append(money_matches[-2])
+
+            for match in sorted(amounts_to_remove, key=lambda item: item.start(), reverse=True):
+                desc = f"{desc[:match.start()]} {desc[match.end():]}"
+            row['Description'] = re.sub(r'\s+', ' ', desc).strip()
+            return row
+
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -437,6 +547,14 @@ if check_password():
                         m = re.search(r'Period\s*:\s*([A-Za-z0-9-]+)\s*-\s*([A-Za-z0-9-]+)', clean, re.IGNORECASE)
                         if m:
                             period = f"{m.group(1)} to {m.group(2)}"
+
+        with pdfplumber.open(pdf_file) as pdf:
+            rows = parse_permata_by_position(pdf)
+
+        if rows:
+            rows = [split_permata_amounts_from_description(row) for row in rows]
+            df = pd.DataFrame(rows)
+            return df, account_no, account_name, period
 
         # Extract ALL text first, deduplicate, then parse line by line
         raw_lines = []
@@ -493,7 +611,7 @@ if check_password():
             
             # Check if this line starts a new transaction: sequence number immediately followed by date
             # Pattern: e.g., "103-Mar-2025" (No=1, PostDate=03-Mar-2025) or "1003-Mar-2025" (No=10)
-            m = re.match(r'^(\d+)(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', line)
+            m = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', line)
             if m:
                 # Save previous row
                 if current_row:
@@ -524,7 +642,7 @@ if check_password():
                 continue
             
             # Try alternative pattern where debit/credit might be empty
-            m2 = re.match(r'^(\d+)(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line)
+            m2 = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line)
             if m2:
                 if current_row:
                     rows.append(current_row)
@@ -581,6 +699,7 @@ if check_password():
         if current_row:
             rows.append(current_row)
 
+        rows = [split_permata_amounts_from_description(row) for row in rows]
         df = pd.DataFrame(rows)
         return df, account_no, account_name, period
 
@@ -694,106 +813,249 @@ if check_password():
 
             return known_exports.get(signature, [])
 
-        # Mekari PDFs typically have a table with: Transaction ID, Date, Merchant, Card, Category, Amount
-        # Or may need OCR-like extraction for more complex layouts
-        
+        def norm_text(value):
+            return re.sub(r'\s+', ' ', str(value or '').replace('\n', ' ')).strip()
+
+        def clean_mekari_amount(value):
+            value = norm_text(value)
+            if not value:
+                return ''
+            negative = value.startswith('(') and value.endswith(')')
+            value = re.sub(r'(?i)\b(rp|idr)\b', '', value)
+            value = re.sub(r'[^0-9,.\-]', '', value)
+            if not value or not re.search(r'\d', value):
+                return ''
+            if value.startswith('-'):
+                negative = True
+                value = value[1:]
+
+            last_dot = value.rfind('.')
+            last_comma = value.rfind(',')
+            decimal_sep = ''
+            if last_dot > -1 and last_comma > -1:
+                decimal_sep = '.' if last_dot > last_comma else ','
+            elif last_dot > -1 and len(value) - last_dot - 1 == 2:
+                decimal_sep = '.'
+            elif last_comma > -1 and len(value) - last_comma - 1 == 2:
+                decimal_sep = ','
+
+            if decimal_sep:
+                thousands_sep = ',' if decimal_sep == '.' else '.'
+                value = value.replace(thousands_sep, '').replace(decimal_sep, '.')
+            else:
+                value = value.replace(',', '').replace('.', '')
+
+            try:
+                amount = float(value)
+                return -amount if negative else amount
+            except ValueError:
+                return ''
+
+        def looks_like_amount(value):
+            text = norm_text(value)
+            if not re.search(r'\d', text):
+                return False
+            if looks_like_mekari_date(text):
+                return False
+            if re.match(r'^\d{8,16}$', text):
+                return False
+            return clean_mekari_amount(text) != ''
+
+        def has_currency_letters(value):
+            return bool(re.search(r'[A-Za-z]', norm_text(value)))
+
+        def looks_like_transaction_id(value):
+            text = norm_text(value)
+            return bool(re.match(r'^(\d{8,16}|[A-Z]{2,}[-/]\d[\w/-]*)$', text))
+
+        def looks_like_mekari_date(value):
+            text = norm_text(value)
+            return bool(re.match(r'^(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})$', text))
+
+        def empty_row(transaction_id='', date='', merchant='', card='', card_holder='', category='', amount='', foreign_amount=''):
+            return {
+                'Transaction ID': norm_text(transaction_id),
+                'Date': norm_text(date),
+                'Merchant': norm_text(merchant),
+                'Card': norm_text(card),
+                'Card Holder': norm_text(card_holder),
+                'Category': norm_text(category),
+                'Amount': clean_mekari_amount(amount) if amount != '' else '',
+                'Foreign Amount': norm_text(foreign_amount),
+            }
+
+        def add_row(row):
+            if not row.get('Date') or row.get('Amount') == '':
+                return
+            if not row.get('Merchant') and not row.get('Transaction ID'):
+                return
+            key = (
+                row.get('Transaction ID', ''),
+                row.get('Date', ''),
+                row.get('Merchant', ''),
+                row.get('Amount', ''),
+            )
+            if key not in seen_rows:
+                rows.append(row)
+                seen_rows.add(key)
+
+        def parse_mekari_table_row(cells, header_map=None):
+            cells = [norm_text(cell) for cell in cells]
+            if not any(cells):
+                return None
+            row_text = ' '.join(cells)
+            if re.search(r'^(total|page|printed|transaction\s+id|date\b)', row_text, re.IGNORECASE):
+                return None
+
+            if header_map:
+                def get(*keys):
+                    normalized_map = {
+                        re.sub(r'[^a-z0-9 ]+', '', column).strip(): idx
+                        for column, idx in header_map.items()
+                    }
+                    for key in keys:
+                        key = re.sub(r'[^a-z0-9 ]+', '', key.lower()).strip()
+                        idx = normalized_map.get(key)
+                        if idx is not None and idx < len(cells):
+                            return cells[idx]
+                    for key in keys:
+                        key = re.sub(r'[^a-z0-9 ]+', '', key.lower()).strip()
+                        for column, idx in normalized_map.items():
+                            if key == 'amount' and 'foreign' in column:
+                                continue
+                            if (key in column or column in key) and idx < len(cells):
+                                return cells[idx]
+                    return ''
+
+                return empty_row(
+                    get('transaction id', 'id transaksi', 'no transaksi'),
+                    get('date', 'tanggal'),
+                    get('merchant', 'description', 'keterangan'),
+                    get('card', 'kartu'),
+                    get('card holder', 'pemegang kartu'),
+                    get('category', 'kategori'),
+                    get('amount', 'nominal', 'jumlah'),
+                    get('foreign amount', 'foreign', 'mata uang asing'),
+                )
+
+            transaction_id = cells[0] if looks_like_transaction_id(cells[0]) else ''
+            date_idx = next((idx for idx, cell in enumerate(cells) if looks_like_mekari_date(cell)), None)
+            amount_idx = next(
+                (idx for idx in range(len(cells) - 1, -1, -1) if looks_like_amount(cells[idx]) and not has_currency_letters(cells[idx])),
+                None
+            )
+            if amount_idx is None:
+                amount_idx = next((idx for idx in range(len(cells) - 1, -1, -1) if looks_like_amount(cells[idx])), None)
+            if date_idx is None or amount_idx is None:
+                return None
+
+            merchant_start = date_idx + 1
+            merchant_end = amount_idx
+            merchant = ' '.join(cells[merchant_start:merchant_end])
+            foreign_amount = ''
+            if amount_idx + 1 < len(cells) and has_currency_letters(cells[amount_idx + 1]):
+                foreign_amount = cells[amount_idx + 1]
+            return empty_row(transaction_id, cells[date_idx], merchant, '', '', '', cells[amount_idx], foreign_amount)
+
+        def parse_mekari_text_line(line_text):
+            line_text = norm_text(line_text)
+            if not line_text or re.search(r'^(total|page|printed|transaction\s+id|date\b)', line_text, re.IGNORECASE):
+                return None
+
+            id_pat = r'(\d{8,16}|[A-Z]{2,}[-/]\d[\w/-]*)'
+            date_pat = r'(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})'
+            match = re.match(rf'^{id_pat}\s+{date_pat}\s+(.+)$', line_text)
+            if match:
+                transaction_id, date, rest = match.group(1), match.group(2), match.group(3)
+            else:
+                match = re.match(rf'^{date_pat}\s+(.+)$', line_text)
+                if not match:
+                    return None
+                transaction_id, date, rest = '', match.group(1), match.group(2)
+
+            parts = rest.split()
+            amount_idx = next(
+                (idx for idx in range(len(parts) - 1, -1, -1) if looks_like_amount(parts[idx]) and not has_currency_letters(parts[idx])),
+                None
+            )
+            if amount_idx is None:
+                amount_idx = next((idx for idx in range(len(parts) - 1, -1, -1) if looks_like_amount(parts[idx])), None)
+            if amount_idx is None:
+                return None
+
+            amount = parts[amount_idx]
+            foreign_amount = ''
+            if amount_idx + 1 < len(parts) and re.match(r'^[A-Z]{3}\s*[-0-9,.]+$', parts[amount_idx + 1], re.IGNORECASE):
+                foreign_amount = parts[amount_idx + 1]
+
+            description = ' '.join(parts[:amount_idx])
+            return empty_row(transaction_id, date, description, '', '', '', amount, foreign_amount)
+
+        def update_mekari_metadata(text):
+            nonlocal company, account_name, period
+            if not text:
+                return
+            lines = [norm_text(line) for line in text.split('\n') if norm_text(line)]
+            for line in lines:
+                if company == "UNKNOWN":
+                    m = re.search(r'(Company|Perusahaan)\s*:?\s*(.+)', line, re.IGNORECASE)
+                    if m:
+                        company = m.group(2).strip()
+                        account_name = company
+                if period == "UNKNOWN":
+                    m = re.search(r'(Period|Periode)\s*:?\s*(.+)', line, re.IGNORECASE)
+                    if m:
+                        period = m.group(2).strip()
+            if account_name == "UNKNOWN" and lines:
+                account_name = lines[0]
+
+        seen_rows = set()
+
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
-                if text:
-                    if company == "UNKNOWN":
-                        lines = text.split('\n')
-                        for line in lines:
-                            if 'Company' in line or 'Perusahaan' in line:
-                                parts = line.split(':')
-                                if len(parts) > 1:
-                                    company = parts[1].strip()
-                                    break
-                        # Try to find company name
-                        if company == "UNKNOWN":
-                            for line in lines[:20]:
-                                line = line.strip()
-                                if line and len(line) > 3 and ' ' in line:
-                                    company = line
-                                    break
+                update_mekari_metadata(text)
+
+                table_settings = {
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "snap_tolerance": 3,
+                    "join_tolerance": 3,
+                    "intersection_tolerance": 5,
+                    "text_tolerance": 3,
+                }
+                for table in page.extract_tables(table_settings=table_settings) or []:
+                    header_map = None
+                    for table_row in table:
+                        cells = [norm_text(cell) for cell in table_row]
+                        header_text = ' '.join(cells).lower()
+                        if 'transaction' in header_text and ('date' in header_text or 'tanggal' in header_text):
+                            header_map = {}
+                            for idx, cell in enumerate(cells):
+                                key = cell.lower()
+                                key = re.sub(r'\s+', ' ', key)
+                                header_map[key] = idx
+                            continue
+                        parsed_row = parse_mekari_table_row(cells, header_map)
+                        if parsed_row:
+                            add_row(parsed_row)
 
                 words = page.extract_words()
                 if not words:
                     continue
-                lines = group_words_into_lines(words, y_tolerance=3)
-
-                is_table = False
-                header_found = False
-
-                for line in lines:
+                for line in group_words_into_lines(words, y_tolerance=4):
                     line_text = " ".join([w['text'] for w in line])
-                    
-                    # Detect table headers
-                    if ('Transaction' in line_text and 'ID' in line_text) or \
-                       ('Date' in line_text and 'Merchant' in line_text) or \
-                       ('Tanggal' in line_text and 'Transaksi' in line_text):
-                        is_table = True
-                        header_found = True
-                        continue
-                    
-                    if re.search(r'(Total|Page|Printed)', line_text, re.IGNORECASE):
-                        is_table = False
-                        if header_found and re.search(r'Total', line_text, re.IGNORECASE):
-                            # Try to capture total
-                            m = re.search(r'Total.*?([0-9,]+\.\d{2})', line_text)
-                            if m:
-                                pass  # We'll skip totals
-                        continue
-                    
-                    if not is_table:
-                        continue
+                    parsed_row = parse_mekari_text_line(line_text)
+                    if parsed_row:
+                        add_row(parsed_row)
+                    elif rows and line_text and line[0]['x0'] > 120 and not re.search(
+                        r'(total|page|printed|company|perusahaan|period|periode|transaction\s+id|date\b|merchant)',
+                        line_text,
+                        re.IGNORECASE
+                    ):
+                        rows[-1]['Merchant'] = norm_text(f"{rows[-1]['Merchant']} {line_text}")
 
-                    # Try multiple date formats
-                    first_word = line[0]['text']
-                    is_date_line = bool(re.match(r'^\d{2}/\d{2}/\d{4}', first_word)) or \
-                                   bool(re.match(r'^\d{4}-\d{2}-\d{2}', first_word)) or \
-                                   bool(re.match(r'^\d{2}-\w{3}-\d{4}', first_word))
-
-                    if is_date_line:
-                        tgl = first_word
-                        trans_id = ""
-                        merchant_words = []
-                        card = ""
-                        category = ""
-                        amount = ""
-                        
-                        for w in line[1:]:
-                            text = w['text']
-                            x = w['x0']
-                            
-                            if is_money(text):
-                                amount = text
-                            elif re.match(r'^[A-Z]{4}\d+$', text) or re.match(r'^EXP-\d+', text):
-                                trans_id = text
-                            elif text in ['VISA', 'MASTERCARD', 'AMEX', 'BCA', 'MANDIRI', 'BNI'] or \
-                                 re.match(r'^\*+\d{4}$', text):
-                                card = text if not card else card
-                            elif text in ['Meals', 'Transport', 'Office Supplies', 'Utilities', 'Entertainment',
-                                          'Makanan', 'Transportasi', 'Perlengkapan Kantor', 'Utililatas', 'Hiburan']:
-                                category = text
-                            else:
-                                if x > 150:  # Only include text that's likely description
-                                    merchant_words.append(text)
-                        
-                        rows.append({
-                            'Transaction ID': trans_id,
-                            'Date': tgl,
-                            'Merchant': " ".join(merchant_words).strip(),
-                            'Card': card,
-                            'Category': category,
-                            'Amount': clean_money(amount) if amount else ''
-                        })
-                    else:
-                        extra = " ".join([w['text'] for w in line])
-                        if rows:
-                            rows[-1]['Merchant'] += " " + extra
-
-        # If no table detected with words, try text-based extraction
+        # If no table detected with words, try image-based known exports.
         if not rows:
             with pdfplumber.open(pdf_file) as pdf:
                 rows = mekari_image_statement_rows(pdf)
@@ -807,24 +1069,26 @@ if check_password():
             with pdfplumber.open(pdf_file) as pdf:
                 for page in pdf.pages:
                     text = page.extract_text()
+                    update_mekari_metadata(text)
                     if text:
-                        if account_name == "UNKNOWN":
-                            account_name = text.split('\n')[0].strip()
-                        # Try regex-based extraction
                         for line in text.split('\n'):
-                            # Match: Date, some description, amount
-                            m = re.search(r'(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})\s+(.+?)\s+([0-9,]+\.\d{2})', line)
-                            if m:
-                                rows.append({
-                                    'Transaction ID': '',
-                                    'Date': m.group(1),
-                                    'Merchant': m.group(2).strip(),
-                                    'Card': '',
-                                    'Category': '',
-                                    'Amount': clean_money(m.group(3))
-                                })
+                            parsed_row = parse_mekari_text_line(line)
+                            if parsed_row:
+                                add_row(parsed_row)
 
         df = pd.DataFrame(rows)
+        if not df.empty:
+            ordered_cols = ['Transaction ID', 'Date', 'Merchant', 'Card', 'Card Holder', 'Category', 'Amount', 'Foreign Amount']
+            for col in ordered_cols:
+                if col not in df.columns:
+                    df[col] = ''
+            df = df[ordered_cols]
+            if period == "UNKNOWN":
+                dates = df['Date'].dropna().astype(str)
+                if not dates.empty:
+                    parts = dates.iloc[0].split()
+                    if len(parts) >= 3:
+                        period = f"{parts[1]} {parts[2]}"
         return df, account_no, account_name, period
 
     # ========== MAIN PROCESSING ==========
