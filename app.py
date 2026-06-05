@@ -491,85 +491,82 @@ if check_password():
                 i += 1
                 continue
             
-            # Check if this line starts a new transaction: sequence number immediately followed by date
-            # Pattern: e.g., "103-Mar-2025" (No=1, PostDate=03-Mar-2025) or "1003-Mar-2025" (No=10)
-            m = re.match(r'^(\d+)(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', line)
-            if m:
-                # Save previous row
-                if current_row:
-                    rows.append(current_row)
-                
-                seq_no = m.group(1)
-                post_date = m.group(2)
-                eff_date = m.group(3)
-                trans_code = m.group(4)
-                cheque_no = m.group(5)
-                ref_no = m.group(6)
-                desc_start = m.group(7).strip()
-                debit = m.group(8)
-                credit = m.group(9)
-                
-                current_row = {
-                    'No': seq_no,
-                    'Post Date': post_date,
-                    'Eff Date': eff_date,
-                    'Transaction Code': trans_code,
-                    'Cheque Number': cheque_no,
-                    'Ref No': ref_no,
-                    'Description': desc_start,
-                    'Debit': clean_money(debit),
-                    'Credit': clean_money(credit)
-                }
-                i += 1
-                continue
+            # Improved pattern: Extract debit and credit from far right of the line
+            # Pattern: seq_no date1 date2 code1 code2 code3 description debit credit
+            # First extract money values from the end of line
+            money_pattern = r'([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$'
+            mm = re.search(money_pattern, line)
             
-            # Try alternative pattern where debit/credit might be empty
-            m2 = re.match(r'^(\d+)(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line)
-            if m2:
-                if current_row:
-                    rows.append(current_row)
+            if mm:
+                # Get the part before debit/credit
+                line_before_money = line[:mm.start()].rstrip()
+                debit = mm.group(1)
+                credit = mm.group(2)
                 
-                seq_no = m2.group(1)
-                post_date = m2.group(2)
-                eff_date = m2.group(3)
-                trans_code = m2.group(4)
-                cheque_no = m2.group(5)
-                ref_no = m2.group(6)
-                rest = m2.group(7).strip()
+                # Now match the fixed fields from the start
+                m = re.match(r'^(\d+)\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line_before_money)
+                if m:
+                    # Save previous row
+                    if current_row:
+                        rows.append(current_row)
+                    
+                    seq_no = m.group(1)
+                    post_date = m.group(2)
+                    eff_date = m.group(3)
+                    trans_code = m.group(4)
+                    cheque_no = m.group(5)
+                    ref_no = m.group(6)
+                    desc_start = m.group(7).strip()
+                    
+                    current_row = {
+                        'No': seq_no,
+                        'Post Date': post_date,
+                        'Eff Date': eff_date,
+                        'Transaction Code': trans_code,
+                        'Cheque Number': cheque_no,
+                        'Ref No': ref_no,
+                        'Description': desc_start,
+                        'Debit': clean_money(debit),
+                        'Credit': clean_money(credit)
+                    }
+                    i += 1
+                    continue
+            
+            # Alternative: Single money value (either debit or credit only)
+            single_money = r'([\d,]+\.\d{2})$'
+            mm2 = re.search(single_money, line)
+            
+            if mm2:
+                line_before_money = line[:mm2.start()].rstrip()
+                money_val = mm2.group(1)
                 
-                # Try to extract debit/credit from end of rest
-                debit = ""
-                credit = ""
-                desc = rest
-                
-                # Check if rest ends with two money values
-                money_pattern = r'([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$'
-                mm = re.search(money_pattern, rest)
-                if mm:
-                    debit = mm.group(1)
-                    credit = mm.group(2)
-                    desc = rest[:mm.start()].strip()
-                else:
-                    # Maybe ends with one money value
-                    mm2 = re.search(r'([\d,]+\.\d{2})$', rest)
-                    if mm2:
-                        # Check if it's at the far right (credit) or could be debit
-                        # Try finding by position in original
-                        pass  # keep desc as rest
-                
-                current_row = {
-                    'No': seq_no,
-                    'Post Date': post_date,
-                    'Eff Date': eff_date,
-                    'Transaction Code': trans_code,
-                    'Cheque Number': cheque_no,
-                    'Ref No': ref_no,
-                    'Description': desc,
-                    'Debit': clean_money(debit) if debit else '',
-                    'Credit': clean_money(credit) if credit else ''
-                }
-                i += 1
-                continue
+                m2 = re.match(r'^(\d+)\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line_before_money)
+                if m2:
+                    if current_row:
+                        rows.append(current_row)
+                    
+                    seq_no = m2.group(1)
+                    post_date = m2.group(2)
+                    eff_date = m2.group(3)
+                    trans_code = m2.group(4)
+                    cheque_no = m2.group(5)
+                    ref_no = m2.group(6)
+                    desc_start = m2.group(7).strip()
+                    
+                    # Assume single value is credit (can be adjusted)
+                    current_row = {
+                        'No': seq_no,
+                        'Post Date': post_date,
+                        'Eff Date': eff_date,
+                        'Transaction Code': trans_code,
+                        'Cheque Number': cheque_no,
+                        'Ref No': ref_no,
+                        'Description': desc_start,
+                        'Debit': '',
+                        'Credit': clean_money(money_val)
+                    }
+                    i += 1
+                    continue
             
             # Otherwise, it's a continuation line (description)
             if current_row:
