@@ -432,7 +432,9 @@ if check_password():
             positioned_rows = []
             current_row = None
             is_table = False
-            x_desc, x_debit, x_credit = 300, 650, 730
+            x_customer, x_desc, x_debit, x_credit = 540, 620, 790, 930
+            header_buffer = []
+            header_line_buffer = []
 
             for page in pdf.pages:
                 words = page.extract_words()
@@ -451,15 +453,32 @@ if check_password():
                     if not line_text:
                         continue
 
-                    if 'No.' in line_text and 'Post Date' in line_text and 'Description' in line_text:
+                    header_buffer = (header_buffer + [line_text])[-3:]
+                    header_line_buffer = (header_line_buffer + [line])[-3:]
+                    header_text = " ".join(header_buffer)
+                    if 'No.' in header_text and 'Post Date' in header_text and 'Description' in header_text:
                         is_table = True
+                        for header_line in header_line_buffer:
+                            for word in header_line:
+                                if word['text'] == 'Description':
+                                    x_desc = word['x0'] - 5
+                                elif word['text'] == 'Customer':
+                                    x_customer = word['x0'] - 5
+                                elif word['text'] == 'Debit':
+                                    x_debit = word['x0'] - 5
+                                elif word['text'] == 'Credit':
+                                    x_credit = word['x0'] - 5
                         for word in line:
                             if word['text'] == 'Description':
                                 x_desc = word['x0'] - 5
+                            elif word['text'] == 'Customer':
+                                x_customer = word['x0'] - 5
                             elif word['text'] == 'Debit':
                                 x_debit = word['x0'] - 5
                             elif word['text'] == 'Credit':
                                 x_credit = word['x0'] - 5
+                        header_buffer = []
+                        header_line_buffer = []
                         continue
 
                     if not is_table:
@@ -474,10 +493,15 @@ if check_password():
                     m = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)', line_text)
                     if not m:
                         if current_row:
-                            continuation = " ".join([
-                                w['text'] for w in line
-                                if x_desc <= w['x0'] < x_debit and not permata_money(w['text'])
-                            ]).strip()
+                            continuation_words = []
+                            for w in line:
+                                if permata_money(w['text']):
+                                    continue
+                                if w['x0'] >= x_desc and w['x0'] < x_debit:
+                                    continuation_words.append(w['text'])
+                                elif w['x0'] >= x_desc and not any(permata_money(item['text']) for item in line):
+                                    continuation_words.append(w['text'])
+                            continuation = " ".join(continuation_words).strip()
                             if continuation and not re.search(r'^(No\.|Post Date|Description|Debit|Credit)', continuation, re.IGNORECASE):
                                 current_row['Description'] = f"{current_row['Description']} {continuation}".strip()
                         continue
@@ -485,15 +509,28 @@ if check_password():
                     if current_row:
                         positioned_rows.append(current_row)
 
-                    money_words = [w for w in line if permata_money(w['text'])]
-                    debit_word = next((w for w in money_words if x_debit <= w['x0'] < x_credit), None)
-                    credit_word = next((w for w in money_words if w['x0'] >= x_credit), None)
+                    money_words = sorted([w for w in line if permata_money(w['text'])], key=lambda item: item['x0'])
+                    debit_word = None
+                    credit_word = None
+                    if len(money_words) >= 2:
+                        debit_word = money_words[-2]
+                        credit_word = money_words[-1]
+                    elif len(money_words) == 1:
+                        amount_word = money_words[0]
+                        if amount_word['x0'] >= x_credit:
+                            credit_word = amount_word
+                        else:
+                            debit_word = amount_word
 
+                    customer_ref_words = []
                     desc_words = []
+                    amount_start_x = debit_word['x0'] if debit_word else (credit_word['x0'] if credit_word else x_debit)
                     for word in line:
                         same_as_debit = debit_word and word['text'] == debit_word['text'] and abs(word['x0'] - debit_word['x0']) < 1
                         same_as_credit = credit_word and word['text'] == credit_word['text'] and abs(word['x0'] - credit_word['x0']) < 1
-                        if x_desc <= word['x0'] < x_debit and not same_as_debit and not same_as_credit:
+                        if x_customer <= word['x0'] < x_desc and not same_as_debit and not same_as_credit:
+                            customer_ref_words.append(word['text'])
+                        elif x_desc <= word['x0'] < amount_start_x and not same_as_debit and not same_as_credit:
                             desc_words.append(word['text'])
 
                     current_row = {
@@ -503,6 +540,7 @@ if check_password():
                         'Transaction Code': m.group(4),
                         'Cheque Number': m.group(5),
                         'Ref No': m.group(6),
+                        'Customer Ref No': " ".join(customer_ref_words).strip(),
                         'Description': " ".join(desc_words).strip(),
                         'Debit': clean_money(debit_word['text']) if debit_word else '',
                         'Credit': clean_money(credit_word['text']) if credit_word else ''
@@ -634,6 +672,7 @@ if check_password():
                     'Transaction Code': trans_code,
                     'Cheque Number': cheque_no,
                     'Ref No': ref_no,
+                    'Customer Ref No': '',
                     'Description': desc_start,
                     'Debit': clean_money(debit),
                     'Credit': clean_money(credit)
@@ -682,6 +721,7 @@ if check_password():
                     'Transaction Code': trans_code,
                     'Cheque Number': cheque_no,
                     'Ref No': ref_no,
+                    'Customer Ref No': '',
                     'Description': desc,
                     'Debit': clean_money(debit) if debit else '',
                     'Credit': clean_money(credit) if credit else ''
