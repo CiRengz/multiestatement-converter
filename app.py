@@ -31,14 +31,14 @@ def check_password():
 if check_password():
     st.title("🏦 Multi-Bank e-Statement to Excel Converter")
     st.write("""
-    Konversi e-Statement PDF ke Excel untuk berbagai bank: **BCA, BRI, OCBC, Permata, Mekari (Jurnal)**.
+    Konversi e-Statement PDF ke Excel untuk berbagai bank: **BCA, BRI, BNI, OCBC, Permata, Mekari (Jurnal)**.
     Upload file PDF sesuai bank, sistem akan mengekstrak transaksi secara otomatis.
     """)
 
     # ========== PILIH BANK ==========
     bank_option = st.selectbox(
         "Pilih Bank / Sumber e-Statement",
-        ["BCA", "BRI", "OCBC NISP", "Permata", "Mekari (Jurnal)"]
+        ["BCA", "BRI", "BNI", "OCBC NISP", "Permata", "Mekari (Jurnal)"]
     )
 
     uploaded_files = st.file_uploader(
@@ -297,6 +297,286 @@ if check_password():
                 return str(d)
             df['Tanggal'] = df['Tanggal'].apply(fix_year)
             df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%d/%m/%Y', errors='coerce').dt.strftime('%d/%m/%Y').fillna("")
+
+        return df, account_no, account_name, period
+
+    # ========== PARSER: BNI ==========
+    def parse_bni(pdf_file):
+        """Parse BNI account statement PDF with Posting Date / Effective Date columns."""
+        rows = []
+        seen_rows = set()
+        ledger_balance = ""
+        account_no = "BNI"
+        account_name = "UNKNOWN"
+        period = "UNKNOWN"
+
+        def norm_text(value):
+            return re.sub(r'\s+', ' ', str(value or '').replace('\n', ' ')).strip()
+
+        def clean_bni_money(value):
+            value = norm_text(value)
+            if not value:
+                return ''
+            value = re.sub(r'[^0-9,.\-]', '', value)
+            if not value or not re.search(r'\d', value):
+                return ''
+            try:
+                return float(value.replace(',', ''))
+            except ValueError:
+                return ''
+
+        def looks_like_bni_datetime(value):
+            return bool(re.match(r'^\d{2}/\d{2}/\d{4}\s+\d{2}[.:]\d{2}[.:]\d{2}$', norm_text(value)))
+
+        def normalize_bni_datetime(value):
+            value = norm_text(value).replace(':', '.')
+            return value
+
+        def parse_period_from_dates():
+            nonlocal period
+            dates = []
+            for row in rows:
+                posting_date = row.get('Posting Date', '')
+                match = re.match(r'^(\d{2})/(\d{2})/(\d{4})', posting_date)
+                if match:
+                    dates.append((match.group(2), match.group(3)))
+            if dates and period == "UNKNOWN":
+                month, year = dates[0]
+                period = f"{month}/{year}"
+
+        def finish_row(row):
+            if not row:
+                return
+
+            row['Posting Date'] = normalize_bni_datetime(row.get('Posting Date', ''))
+            row['Effective Date'] = normalize_bni_datetime(row.get('Effective Date', ''))
+            row['Branch'] = norm_text(row.get('Branch', ''))
+            row['Journal'] = norm_text(row.get('Journal', ''))
+            row['Transaction Description'] = norm_text(row.get('Transaction Description', ''))
+            row['DB/CR'] = norm_text(row.get('DB/CR', '')).upper()
+
+            amount = clean_bni_money(row.get('Amount', ''))
+            balance = clean_bni_money(row.get('Balance', ''))
+            ledger = clean_bni_money(row.get('Ledger Balance', ledger_balance))
+
+            row['Amount'] = amount
+            row['Debit'] = amount if row['DB/CR'] == 'D' else ''
+            row['Kredit'] = amount if row['DB/CR'] == 'K' else ''
+            row['Balance'] = balance
+            row['Ledger Balance'] = ledger
+
+            key = (
+                row['Posting Date'],
+                row['Effective Date'],
+                row['Journal'],
+                row['Transaction Description'],
+                row['Amount'],
+                row['DB/CR'],
+                row['Balance'],
+            )
+            if row['Posting Date'] and row['Amount'] != '' and key not in seen_rows:
+                rows.append(row)
+                seen_rows.add(key)
+
+        def parse_bni_table_cells(pdf):
+            nonlocal ledger_balance
+            current_row = None
+            found_rows = False
+
+            for page in pdf.pages:
+                text = page.extract_text() or ''
+                if text and not ledger_balance:
+                    match = re.search(r'Ledger\s*Balance\s*:?\s*([\d,]+\.\d{2}|[\d,]+)', text, re.IGNORECASE)
+                    if match:
+                        ledger_balance = match.group(1)
+
+                for table in page.extract_tables() or []:
+                    header_found = False
+                    for table_row in table:
+                        cells = [norm_text(cell) for cell in table_row]
+                        row_text = ' '.join(cells)
+                        if not any(cells):
+                            continue
+
+                        ledger_match = re.search(r'Ledger\s*Balance\s*:?\s*([\d,]+\.\d{2}|[\d,]+)', row_text, re.IGNORECASE)
+                        if ledger_match:
+                            ledger_balance = ledger_match.group(1)
+                            continue
+
+                        header_text = row_text.lower()
+                        if 'posting date' in header_text and 'effective date' in header_text and 'transaction description' in header_text:
+                            header_found = True
+                            continue
+                        if not header_found:
+                            continue
+
+                        if len(cells) < 8:
+                            cells = cells + [''] * (8 - len(cells))
+
+                        posting_date = cells[0]
+                        if looks_like_bni_datetime(posting_date):
+                            finish_row(current_row)
+                            current_row = {
+                                'Posting Date': posting_date,
+                                'Effective Date': cells[1],
+                                'Branch': cells[2],
+                                'Journal': cells[3],
+                                'Transaction Description': cells[4],
+                                'Amount': cells[5],
+                                'DB/CR': cells[6],
+                                'Balance': cells[7],
+                                'Ledger Balance': ledger_balance,
+                            }
+                            found_rows = True
+                        elif current_row:
+                            current_row['Branch'] = norm_text(f"{current_row.get('Branch', '')} {cells[2] if len(cells) > 2 else ''}")
+                            current_row['Transaction Description'] = norm_text(
+                                f"{current_row.get('Transaction Description', '')} {cells[4] if len(cells) > 4 else row_text}"
+                            )
+
+            finish_row(current_row)
+            return found_rows
+
+        def parse_bni_by_position(pdf):
+            nonlocal ledger_balance
+            current_row = None
+            found_rows = False
+            is_table = False
+            header_buffer = []
+            header_line_buffer = []
+            x_posting, x_effective, x_branch, x_journal = 20, 115, 235, 310
+            x_desc, x_amount, x_dbcr, x_balance = 365, 545, 640, 685
+
+            def set_header_position(line):
+                nonlocal x_posting, x_effective, x_branch, x_journal, x_desc, x_amount, x_dbcr, x_balance
+                for word in line:
+                    text = word['text'].lower()
+                    if text == 'posting':
+                        x_posting = word['x0'] - 4
+                    elif text == 'effective':
+                        x_effective = word['x0'] - 4
+                    elif text == 'branch':
+                        x_branch = word['x0'] - 4
+                    elif text == 'journal':
+                        x_journal = word['x0'] - 4
+                    elif text == 'transaction':
+                        x_desc = word['x0'] - 4
+                    elif text == 'amount':
+                        x_amount = word['x0'] - 4
+                    elif text in ('db/cr', 'db', 'cr'):
+                        x_dbcr = word['x0'] - 4
+                    elif text == 'balance':
+                        x_balance = word['x0'] - 4
+
+            def column_for_word(word):
+                x = word['x0']
+                if x < x_effective:
+                    return 'posting'
+                if x < x_branch:
+                    return 'effective'
+                if x < x_journal:
+                    return 'branch'
+                if x < x_desc:
+                    return 'journal'
+                if x < x_amount:
+                    return 'description'
+                if x < x_dbcr:
+                    return 'amount'
+                if x < x_balance:
+                    return 'dbcr'
+                return 'balance'
+
+            def text_in_column(line, column):
+                return norm_text(' '.join([w['text'] for w in line if column_for_word(w) == column]))
+
+            for page in pdf.pages:
+                words = page.extract_words() or []
+                if not words:
+                    continue
+                lines = group_words_into_lines(words, y_tolerance=4)
+
+                for line in lines:
+                    line_text = norm_text(' '.join([w['text'] for w in line]))
+                    if not line_text:
+                        continue
+
+                    ledger_match = re.search(r'Ledger\s*Balance\s*:?\s*([\d,]+\.\d{2}|[\d,]+)', line_text, re.IGNORECASE)
+                    if ledger_match:
+                        ledger_balance = ledger_match.group(1)
+                        continue
+
+                    header_buffer = (header_buffer + [line_text])[-3:]
+                    header_line_buffer = (header_line_buffer + [line])[-3:]
+                    header_text = ' '.join(header_buffer).lower()
+                    if 'posting date' in header_text and 'effective date' in header_text and 'transaction description' in header_text:
+                        is_table = True
+                        for header_line in header_line_buffer:
+                            set_header_position(header_line)
+                        header_buffer = []
+                        header_line_buffer = []
+                        continue
+
+                    if not is_table:
+                        continue
+                    if re.search(r'(total|closing|page\s+\d+)', line_text, re.IGNORECASE):
+                        continue
+
+                    posting = text_in_column(line, 'posting')
+                    if looks_like_bni_datetime(posting):
+                        finish_row(current_row)
+                        current_row = {
+                            'Posting Date': posting,
+                            'Effective Date': text_in_column(line, 'effective'),
+                            'Branch': text_in_column(line, 'branch'),
+                            'Journal': text_in_column(line, 'journal'),
+                            'Transaction Description': text_in_column(line, 'description'),
+                            'Amount': text_in_column(line, 'amount'),
+                            'DB/CR': text_in_column(line, 'dbcr'),
+                            'Balance': text_in_column(line, 'balance'),
+                            'Ledger Balance': ledger_balance,
+                        }
+                        found_rows = True
+                    elif current_row:
+                        branch_extra = text_in_column(line, 'branch')
+                        desc_extra = text_in_column(line, 'description')
+                        if branch_extra:
+                            current_row['Branch'] = norm_text(f"{current_row.get('Branch', '')} {branch_extra}")
+                        if desc_extra:
+                            current_row['Transaction Description'] = norm_text(
+                                f"{current_row.get('Transaction Description', '')} {desc_extra}"
+                            )
+
+            finish_row(current_row)
+            return found_rows
+
+        with pdfplumber.open(pdf_file) as pdf:
+            parse_bni_table_cells(pdf)
+
+        if not rows:
+            with pdfplumber.open(pdf_file) as pdf:
+                parse_bni_by_position(pdf)
+
+        parse_period_from_dates()
+
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            ordered_cols = [
+                'Posting Date',
+                'Effective Date',
+                'Branch',
+                'Journal',
+                'Transaction Description',
+                'Amount',
+                'DB/CR',
+                'Debit',
+                'Kredit',
+                'Balance',
+                'Ledger Balance',
+            ]
+            for col in ordered_cols:
+                if col not in df.columns:
+                    df[col] = ''
+            df = df[ordered_cols]
 
         return df, account_no, account_name, period
 
@@ -1172,6 +1452,7 @@ if check_password():
             parser_map = {
                 "BCA": parse_bca,
                 "BRI": parse_bri,
+                "BNI": parse_bni,
                 "OCBC NISP": parse_ocbc,
                 "Permata": parse_permata,
                 "Mekari (Jurnal)": parse_mekari
@@ -1231,7 +1512,7 @@ if check_password():
                             worksheet.set_column(col_idx, col_idx, max_len, format_text)
 
                             # Format money columns
-                            if col_name in ['Debit', 'Kredit', 'Credit', 'Nominal', 'Amount', 'Saldo', 'Balance']:
+                            if col_name in ['Debit', 'Kredit', 'Credit', 'Nominal', 'Amount', 'Saldo', 'Balance', 'Ledger Balance']:
                                 worksheet.set_column(col_idx, col_idx, max(max_len, 18), format_comma)
 
                         # Apply header format
