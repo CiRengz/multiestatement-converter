@@ -31,14 +31,14 @@ def check_password():
 if check_password():
     st.title("🏦 Multi-Bank e-Statement to Excel Converter")
     st.write("""
-    Konversi e-Statement PDF ke Excel untuk berbagai bank: **BCA, BRI, BNI, OCBC, Permata, Mekari (Jurnal)**.
+    Konversi e-Statement PDF ke Excel untuk berbagai bank: **BCA, BRI, BNI, Mandiri Kopra, OCBC, Permata, Mekari (Jurnal)**.
     Upload file PDF sesuai bank, sistem akan mengekstrak transaksi secara otomatis.
     """)
 
     # ========== PILIH BANK ==========
     bank_option = st.selectbox(
         "Pilih Bank / Sumber e-Statement",
-        ["BCA", "BRI", "BNI", "OCBC NISP", "Permata", "Mekari (Jurnal)", "Mandiri Kopra"]
+        ["BCA", "BRI", "BNI", "Mandiri Kopra", "OCBC NISP", "Permata", "Mekari (Jurnal)"]
     )
 
     uploaded_files = st.file_uploader(
@@ -213,23 +213,18 @@ if check_password():
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
-                    # Extract account info
                     if account_no == "UNKNOWN":
                         m = re.search(r'No\.?\s*Rekening\s*:?\s*(\d+)', text, re.IGNORECASE)
-                        if m:
-                            account_no = m.group(1)
+                        if m: account_no = m.group(1)
                     if account_name == "UNKNOWN":
                         m = re.search(r'Kepada\s*Yth\.?\s*/\s*To\s*:\s*\n(.+)', text, re.IGNORECASE)
-                        if m:
-                            account_name = m.group(1).strip()
+                        if m: account_name = m.group(1).strip()
                     if period == "UNKNOWN":
                         m = re.search(r'Periode\s*Transaksi\s*:?\s*(.+)', text, re.IGNORECASE)
-                        if m:
-                            period = m.group(1).strip()
+                        if m: period = m.group(1).strip()
 
                 words = page.extract_words()
-                if not words:
-                    continue
+                if not words: continue
                 lines = group_words_into_lines(words)
 
                 is_table = False
@@ -248,10 +243,8 @@ if check_password():
 
                     if re.search(r'(Saldo\s*Awal|Total\s*Transaksi|Terbilang)', line_text, re.IGNORECASE):
                         is_table = False
-                    if not is_table:
-                        continue
+                    if not is_table: continue
 
-                    # First word should be date dd/mm/yy
                     first_word = line[0]['text']
                     if re.match(r'^\d{2}/\d{2}/\d{2}', first_word):
                         tgl = first_word
@@ -261,14 +254,10 @@ if check_password():
                         for w in line[1:]:
                             text = w['text']
                             x = w['x0']
-                            if x >= x_saldo and is_money(text):
-                                saldo = text
-                            elif x >= x_kredit and is_money(text):
-                                kredit = text
-                            elif x >= x_debet and is_money(text):
-                                debet = text
-                            else:
-                                uraian_words.append(text)
+                            if x >= x_saldo and is_money(text): saldo = text
+                            elif x >= x_kredit and is_money(text): kredit = text
+                            elif x >= x_debet and is_money(text): debet = text
+                            else: uraian_words.append(text)
                         
                         rows.append({
                             'Tanggal': tgl,
@@ -279,15 +268,12 @@ if check_password():
                         })
                     else:
                         extra = " ".join([w['text'] for w in line])
-                        if rows:
-                            rows[-1]['Uraian'] += " " + extra
+                        if rows: rows[-1]['Uraian'] += " " + extra
 
         df = pd.DataFrame(rows)
         if not df.empty:
-            # Convert date from dd/mm/yy to dd/mm/yyyy
             def fix_year(d):
-                if pd.isna(d):
-                    return ""
+                if pd.isna(d): return ""
                 parts = str(d).split('/')
                 if len(parts) == 3:
                     yy = parts[2]
@@ -315,22 +301,17 @@ if check_password():
 
         def clean_bni_money(value):
             value = norm_text(value)
-            if not value:
-                return ''
+            if not value: return ''
             value = re.sub(r'[^0-9,.\-]', '', value)
-            if not value or not re.search(r'\d', value):
-                return ''
-            try:
-                return float(value.replace(',', ''))
-            except ValueError:
-                return ''
+            if not value or not re.search(r'\d', value): return ''
+            try: return float(value.replace(',', ''))
+            except ValueError: return ''
 
         def looks_like_bni_datetime(value):
             return bool(re.match(r'^\d{2}/\d{2}/\d{4}\s+\d{2}[.:]\d{2}[.:]\d{2}$', norm_text(value)))
 
         def normalize_bni_datetime(value):
-            value = norm_text(value).replace(':', '.')
-            return value
+            return norm_text(value).replace(':', '.')
 
         def parse_period_from_dates():
             nonlocal period
@@ -338,16 +319,13 @@ if check_password():
             for row in rows:
                 posting_date = row.get('Posting Date', '')
                 match = re.match(r'^(\d{2})/(\d{2})/(\d{4})', posting_date)
-                if match:
-                    dates.append((match.group(2), match.group(3)))
+                if match: dates.append((match.group(2), match.group(3)))
             if dates and period == "UNKNOWN":
                 month, year = dates[0]
                 period = f"{month}/{year}"
 
         def finish_row(row):
-            if not row:
-                return
-
+            if not row: return
             row['Posting Date'] = normalize_bni_datetime(row.get('Posting Date', ''))
             row['Effective Date'] = normalize_bni_datetime(row.get('Effective Date', ''))
             row['Branch'] = norm_text(row.get('Branch', ''))
@@ -365,15 +343,7 @@ if check_password():
             row['Balance'] = balance
             row['Ledger Balance'] = ledger
 
-            key = (
-                row['Posting Date'],
-                row['Effective Date'],
-                row['Journal'],
-                row['Transaction Description'],
-                row['Amount'],
-                row['DB/CR'],
-                row['Balance'],
-            )
+            key = (row['Posting Date'], row['Effective Date'], row['Journal'], row['Transaction Description'], row['Amount'], row['DB/CR'], row['Balance'])
             if row['Posting Date'] and row['Amount'] != '' and key not in seen_rows:
                 rows.append(row)
                 seen_rows.add(key)
@@ -382,21 +352,18 @@ if check_password():
             nonlocal ledger_balance
             current_row = None
             found_rows = False
-
             for page in pdf.pages:
                 text = page.extract_text() or ''
                 if text and not ledger_balance:
                     match = re.search(r'Ledger\s*Balance\s*:?\s*([\d,]+\.\d{2}|[\d,]+)', text, re.IGNORECASE)
-                    if match:
-                        ledger_balance = match.group(1)
+                    if match: ledger_balance = match.group(1)
 
                 for table in page.extract_tables() or []:
                     header_found = False
                     for table_row in table:
                         cells = [norm_text(cell) for cell in table_row]
                         row_text = ' '.join(cells)
-                        if not any(cells):
-                            continue
+                        if not any(cells): continue
 
                         ledger_match = re.search(r'Ledger\s*Balance\s*:?\s*([\d,]+\.\d{2}|[\d,]+)', row_text, re.IGNORECASE)
                         if ledger_match:
@@ -407,33 +374,22 @@ if check_password():
                         if 'posting date' in header_text and 'effective date' in header_text and 'transaction description' in header_text:
                             header_found = True
                             continue
-                        if not header_found:
-                            continue
+                        if not header_found: continue
 
-                        if len(cells) < 8:
-                            cells = cells + [''] * (8 - len(cells))
+                        if len(cells) < 8: cells = cells + [''] * (8 - len(cells))
 
                         posting_date = cells[0]
                         if looks_like_bni_datetime(posting_date):
                             finish_row(current_row)
                             current_row = {
-                                'Posting Date': posting_date,
-                                'Effective Date': cells[1],
-                                'Branch': cells[2],
-                                'Journal': cells[3],
-                                'Transaction Description': cells[4],
-                                'Amount': cells[5],
-                                'DB/CR': cells[6],
-                                'Balance': cells[7],
-                                'Ledger Balance': ledger_balance,
+                                'Posting Date': posting_date, 'Effective Date': cells[1], 'Branch': cells[2],
+                                'Journal': cells[3], 'Transaction Description': cells[4], 'Amount': cells[5],
+                                'DB/CR': cells[6], 'Balance': cells[7], 'Ledger Balance': ledger_balance,
                             }
                             found_rows = True
                         elif current_row:
                             current_row['Branch'] = norm_text(f"{current_row.get('Branch', '')} {cells[2] if len(cells) > 2 else ''}")
-                            current_row['Transaction Description'] = norm_text(
-                                f"{current_row.get('Transaction Description', '')} {cells[4] if len(cells) > 4 else row_text}"
-                            )
-
+                            current_row['Transaction Description'] = norm_text(f"{current_row.get('Transaction Description', '')} {cells[4] if len(cells) > 4 else row_text}")
             finish_row(current_row)
             return found_rows
 
@@ -442,8 +398,7 @@ if check_password():
             current_row = None
             found_rows = False
             is_table = False
-            header_buffer = []
-            header_line_buffer = []
+            header_buffer, header_line_buffer = [], []
             x_posting, x_effective, x_branch, x_journal = 20, 115, 235, 310
             x_desc, x_amount, x_dbcr, x_balance = 365, 545, 640, 685
 
@@ -451,39 +406,24 @@ if check_password():
                 nonlocal x_posting, x_effective, x_branch, x_journal, x_desc, x_amount, x_dbcr, x_balance
                 for word in line:
                     text = word['text'].lower()
-                    if text == 'posting':
-                        x_posting = word['x0'] - 4
-                    elif text == 'effective':
-                        x_effective = word['x0'] - 4
-                    elif text == 'branch':
-                        x_branch = word['x0'] - 4
-                    elif text == 'journal':
-                        x_journal = word['x0'] - 4
-                    elif text == 'transaction':
-                        x_desc = word['x0'] - 4
-                    elif text == 'amount':
-                        x_amount = word['x0'] - 4
-                    elif text in ('db/cr', 'db', 'cr'):
-                        x_dbcr = word['x0'] - 4
-                    elif text == 'balance':
-                        x_balance = word['x0'] - 4
+                    if text == 'posting': x_posting = word['x0'] - 4
+                    elif text == 'effective': x_effective = word['x0'] - 4
+                    elif text == 'branch': x_branch = word['x0'] - 4
+                    elif text == 'journal': x_journal = word['x0'] - 4
+                    elif text == 'transaction': x_desc = word['x0'] - 4
+                    elif text == 'amount': x_amount = word['x0'] - 4
+                    elif text in ('db/cr', 'db', 'cr'): x_dbcr = word['x0'] - 4
+                    elif text == 'balance': x_balance = word['x0'] - 4
 
             def column_for_word(word):
                 x = word['x0']
-                if x < x_effective:
-                    return 'posting'
-                if x < x_branch:
-                    return 'effective'
-                if x < x_journal:
-                    return 'branch'
-                if x < x_desc:
-                    return 'journal'
-                if x < x_amount:
-                    return 'description'
-                if x < x_dbcr:
-                    return 'amount'
-                if x < x_balance:
-                    return 'dbcr'
+                if x < x_effective: return 'posting'
+                if x < x_branch: return 'effective'
+                if x < x_journal: return 'branch'
+                if x < x_desc: return 'journal'
+                if x < x_amount: return 'description'
+                if x < x_dbcr: return 'amount'
+                if x < x_balance: return 'dbcr'
                 return 'balance'
 
             def text_in_column(line, column):
@@ -491,14 +431,12 @@ if check_password():
 
             for page in pdf.pages:
                 words = page.extract_words() or []
-                if not words:
-                    continue
+                if not words: continue
                 lines = group_words_into_lines(words, y_tolerance=4)
 
                 for line in lines:
                     line_text = norm_text(' '.join([w['text'] for w in line]))
-                    if not line_text:
-                        continue
+                    if not line_text: continue
 
                     ledger_match = re.search(r'Ledger\s*Balance\s*:?\s*([\d,]+\.\d{2}|[\d,]+)', line_text, re.IGNORECASE)
                     if ledger_match:
@@ -510,74 +448,41 @@ if check_password():
                     header_text = ' '.join(header_buffer).lower()
                     if 'posting date' in header_text and 'effective date' in header_text and 'transaction description' in header_text:
                         is_table = True
-                        for header_line in header_line_buffer:
-                            set_header_position(header_line)
-                        header_buffer = []
-                        header_line_buffer = []
+                        for header_line in header_line_buffer: set_header_position(header_line)
+                        header_buffer, header_line_buffer = [], []
                         continue
 
-                    if not is_table:
-                        continue
-                    if re.search(r'(total|closing|page\s+\d+)', line_text, re.IGNORECASE):
-                        continue
+                    if not is_table: continue
+                    if re.search(r'(total|closing|page\s+\d+)', line_text, re.IGNORECASE): continue
 
                     posting = text_in_column(line, 'posting')
                     if looks_like_bni_datetime(posting):
                         finish_row(current_row)
                         current_row = {
-                            'Posting Date': posting,
-                            'Effective Date': text_in_column(line, 'effective'),
-                            'Branch': text_in_column(line, 'branch'),
-                            'Journal': text_in_column(line, 'journal'),
-                            'Transaction Description': text_in_column(line, 'description'),
-                            'Amount': text_in_column(line, 'amount'),
-                            'DB/CR': text_in_column(line, 'dbcr'),
-                            'Balance': text_in_column(line, 'balance'),
-                            'Ledger Balance': ledger_balance,
+                            'Posting Date': posting, 'Effective Date': text_in_column(line, 'effective'),
+                            'Branch': text_in_column(line, 'branch'), 'Journal': text_in_column(line, 'journal'),
+                            'Transaction Description': text_in_column(line, 'description'), 'Amount': text_in_column(line, 'amount'),
+                            'DB/CR': text_in_column(line, 'dbcr'), 'Balance': text_in_column(line, 'balance'), 'Ledger Balance': ledger_balance,
                         }
                         found_rows = True
                     elif current_row:
-                        branch_extra = text_in_column(line, 'branch')
-                        desc_extra = text_in_column(line, 'description')
-                        if branch_extra:
-                            current_row['Branch'] = norm_text(f"{current_row.get('Branch', '')} {branch_extra}")
-                        if desc_extra:
-                            current_row['Transaction Description'] = norm_text(
-                                f"{current_row.get('Transaction Description', '')} {desc_extra}"
-                            )
-
+                        branch_extra, desc_extra = text_in_column(line, 'branch'), text_in_column(line, 'description')
+                        if branch_extra: current_row['Branch'] = norm_text(f"{current_row.get('Branch', '')} {branch_extra}")
+                        if desc_extra: current_row['Transaction Description'] = norm_text(f"{current_row.get('Transaction Description', '')} {desc_extra}")
             finish_row(current_row)
             return found_rows
 
-        with pdfplumber.open(pdf_file) as pdf:
-            parse_bni_table_cells(pdf)
-
+        with pdfplumber.open(pdf_file) as pdf: parse_bni_table_cells(pdf)
         if not rows:
-            with pdfplumber.open(pdf_file) as pdf:
-                parse_bni_by_position(pdf)
-
+            with pdfplumber.open(pdf_file) as pdf: parse_bni_by_position(pdf)
         parse_period_from_dates()
 
         df = pd.DataFrame(rows)
         if not df.empty:
-            ordered_cols = [
-                'Posting Date',
-                'Effective Date',
-                'Branch',
-                'Journal',
-                'Transaction Description',
-                'Amount',
-                'DB/CR',
-                'Debit',
-                'Kredit',
-                'Balance',
-                'Ledger Balance',
-            ]
+            ordered_cols = ['Posting Date', 'Effective Date', 'Branch', 'Journal', 'Transaction Description', 'Amount', 'DB/CR', 'Debit', 'Kredit', 'Balance', 'Ledger Balance']
             for col in ordered_cols:
-                if col not in df.columns:
-                    df[col] = ''
+                if col not in df.columns: df[col] = ''
             df = df[ordered_cols]
-
         return df, account_no, account_name, period
 
     # ========== PARSER: OCBC NISP ==========
@@ -594,22 +499,18 @@ if check_password():
                 if text:
                     if account_no == "UNKNOWN":
                         m = re.search(r'Account\s*No\s*:?\s*(\d+\s*-\s*[A-Z]+)', text)
-                        if m:
-                            account_no = m.group(1).strip()
+                        if m: account_no = m.group(1).strip()
                     if account_name == "UNKNOWN":
                         m = re.search(r'Account\s*Name\s*:?\s*(.+?)(?:\s+Closing\s+Balance|\n|$)', text)
-                        if m:
-                            account_name = m.group(1).strip()
+                        if m: account_name = m.group(1).strip()
                     if period == "UNKNOWN":
                         m = re.search(r'FROM\s*:\s*([\d-]+)\s*TO\s*:\s*([\d-]+)', text)
-                        if m:
-                            period = f"{m.group(1)} to {m.group(2)}"
+                        if m: period = f"{m.group(1)} to {m.group(2)}"
 
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 words = page.extract_words()
-                if not words:
-                    continue
+                if not words: continue
                 lines = group_words_into_lines(words, y_tolerance=4)
 
                 is_table = False
@@ -618,17 +519,10 @@ if check_password():
                 for line in lines:
                     line_text = " ".join([w['text'] for w in line])
                     
-                    # OCBC headers may be split across lines:
-                    # "Transaction" then "Date Value Date Reference No. ..."
                     header_buffer = (header_buffer + [line_text])[-3:]
                     header_text = " ".join(header_buffer)
-                    if (
-                        'Transaction' in header_text
-                        and 'Value Date' in header_text
-                        and 'Reference' in header_text
-                        and 'Description' in header_text
-                        and 'Balance' in header_text
-                    ):
+                    if ('Transaction' in header_text and 'Value Date' in header_text and 
+                        'Reference' in header_text and 'Description' in header_text and 'Balance' in header_text):
                         is_table = True
                         header_buffer = []
                         continue
@@ -637,13 +531,8 @@ if check_password():
                         is_table = False
                         continue
 
-                    if not is_table:
-                        continue
+                    if not is_table: continue
 
-                    # OCBC line format:
-                    # Transaction Date, Value Date, Reference No, Cheque No, Description, Debit, Credit, Balance.
-                    # The Apr-2025 statement places the table at these approximate x positions:
-                    # 42, 97, 157, 257, 332, 555, 667, 768.
                     if re.match(r'^\d{2}/\d{2}/\d{4}$', line[0]['text']):
                         tgl = line[0]['text']
                         val_date = next((w['text'] for w in line if 85 <= w['x0'] < 150 and re.match(r'^\d{2}/\d{2}/\d{4}$', w['text'])), "")
@@ -654,14 +543,11 @@ if check_password():
                         balance_word = money_words[-1] if money_words else None
                         amount_word = money_words[-2] if len(money_words) >= 2 else None
                         balance = balance_word['text'] if balance_word else ""
-                        debit = ""
-                        credit = ""
+                        debit = credit = ""
 
                         if amount_word:
-                            if amount_word['x0'] >= 620:
-                                credit = amount_word['text']
-                            else:
-                                debit = amount_word['text']
+                            if amount_word['x0'] >= 620: credit = amount_word['text']
+                            else: debit = amount_word['text']
 
                         desc_words = []
                         for w in line:
@@ -671,52 +557,34 @@ if check_password():
                                 desc_words.append(w['text'])
 
                         rows.append({
-                            'Transaction Date': tgl,
-                            'Value Date': val_date,
-                            'Reference No': ref_no,
-                            'Cheque No': cheque,
-                            'Description': " ".join(desc_words).strip(),
+                            'Transaction Date': tgl, 'Value Date': val_date, 'Reference No': ref_no,
+                            'Cheque No': cheque, 'Description': " ".join(desc_words).strip(),
                             'Debit': clean_money(debit) if debit else '',
                             'Credit': clean_money(credit) if credit else '',
                             'Balance': clean_money(balance) if balance else ''
                         })
                     else:
-                        # Description continuation
                         extra = " ".join([w['text'] for w in line])
-                        if rows:
-                            rows[-1]['Description'] += " " + extra
+                        if rows: rows[-1]['Description'] += " " + extra
 
         df = pd.DataFrame(rows)
         return df, account_no, account_name, period
 
     # ========== PARSER: Permata ==========
     def deduplicate_chars(text):
-        """Permata PDF uses a font that renders every character twice.
-        This function removes the duplicate characters."""
         def dedup_token(match):
             token = match.group(0)
-            if len(token) < 4:
-                return token
-
-            # Do not collapse normal numeric fields like 1,500,000.00 or 0000000000.
-            if not re.search(r'[A-Za-z/-]', token):
-                return token
-
+            if len(token) < 4: return token
+            if not re.search(r'[A-Za-z/-]', token): return token
             pairs = [token[i:i + 2] for i in range(0, len(token), 2)]
             complete_pairs = [pair for pair in pairs if len(pair) == 2]
-            if not complete_pairs:
-                return token
-
+            if not complete_pairs: return token
             duplicated_pairs = sum(1 for pair in complete_pairs if pair[0] == pair[1])
-            if duplicated_pairs / len(complete_pairs) >= 0.75:
-                return token[::2]
-
+            if duplicated_pairs / len(complete_pairs) >= 0.75: return token[::2]
             return token
-
         return re.sub(r'\S+', dedup_token, text)
 
     def parse_permata(pdf_file):
-        """Parse Permata e-Statement PDF (handles doubled character font)"""
         rows = []
         account_no = "UNKNOWN"
         account_name = "UNKNOWN"
@@ -731,11 +599,7 @@ if check_password():
         def description_from_transaction_text(line_text):
             text = re.sub(r'\s+', ' ', line_text).strip()
             text = re.sub(r'\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s*$', '', text)
-            text = re.sub(
-                r'^\d+\s*\d{2}-[A-Za-z]+-\d{4}\s+\d{2}-[A-Za-z]+-\d{4}\s+\S+\s+\S+\s*',
-                '',
-                text
-            )
+            text = re.sub(r'^\d+\s*\d{2}-[A-Za-z]+-\d{4}\s+\d{2}-[A-Za-z]+-\d{4}\s+\S+\s+\S+\s*', '', text)
             return text.strip()
 
         def parse_permata_by_position(pdf):
@@ -743,56 +607,43 @@ if check_password():
             current_row = None
             is_table = False
             x_customer, x_desc, x_debit, x_credit = 540, 620, 790, 930
-            header_buffer = []
-            header_line_buffer = []
+            header_buffer, header_line_buffer = [], []
 
             for page in pdf.pages:
                 words = page.extract_words()
-                if not words:
-                    continue
+                if not words: continue
 
                 clean_words = []
                 for word in words:
                     clean_word = dict(word)
                     clean_word['text'] = dedup_word(word)
-                    if clean_word['text']:
-                        clean_words.append(clean_word)
+                    if clean_word['text']: clean_words.append(clean_word)
 
                 for line in group_words_into_lines(clean_words, y_tolerance=4):
                     line_text = " ".join([w['text'] for w in line]).strip()
-                    if not line_text:
-                        continue
+                    if not line_text: continue
 
                     header_buffer = (header_buffer + [line_text])[-3:]
                     header_line_buffer = (header_line_buffer + [line])[-3:]
                     header_text = " ".join(header_buffer)
+                    
                     if 'No.' in header_text and 'Post Date' in header_text and 'Description' in header_text:
                         is_table = True
                         for header_line in header_line_buffer:
                             for word in header_line:
-                                if word['text'] == 'Description':
-                                    x_desc = word['x0'] - 5
-                                elif word['text'] == 'Customer':
-                                    x_customer = word['x0'] - 5
-                                elif word['text'] == 'Debit':
-                                    x_debit = word['x0'] - 5
-                                elif word['text'] == 'Credit':
-                                    x_credit = word['x0'] - 5
+                                if word['text'] == 'Description': x_desc = word['x0'] - 5
+                                elif word['text'] == 'Customer': x_customer = word['x0'] - 5
+                                elif word['text'] == 'Debit': x_debit = word['x0'] - 5
+                                elif word['text'] == 'Credit': x_credit = word['x0'] - 5
                         for word in line:
-                            if word['text'] == 'Description':
-                                x_desc = word['x0'] - 5
-                            elif word['text'] == 'Customer':
-                                x_customer = word['x0'] - 5
-                            elif word['text'] == 'Debit':
-                                x_debit = word['x0'] - 5
-                            elif word['text'] == 'Credit':
-                                x_credit = word['x0'] - 5
-                        header_buffer = []
-                        header_line_buffer = []
+                            if word['text'] == 'Description': x_desc = word['x0'] - 5
+                            elif word['text'] == 'Customer': x_customer = word['x0'] - 5
+                            elif word['text'] == 'Debit': x_debit = word['x0'] - 5
+                            elif word['text'] == 'Credit': x_credit = word['x0'] - 5
+                        header_buffer, header_line_buffer = [], []
                         continue
 
-                    if not is_table:
-                        continue
+                    if not is_table: continue
 
                     if re.search(r'(Opening Ledger|Closing Ledger|Ineffective Balance|Hold Amount|Loan Facility|Record not found|Total|Ledger Balance per)', line_text, re.IGNORECASE):
                         if current_row:
@@ -805,8 +656,7 @@ if check_password():
                         if current_row:
                             continuation_words = []
                             for w in line:
-                                if permata_money(w['text']):
-                                    continue
+                                if permata_money(w['text']): continue
                                 if w['x0'] >= x_desc and w['x0'] < x_debit:
                                     continuation_words.append(w['text'])
                                 elif w['x0'] >= x_desc and not any(permata_money(item['text']) for item in line):
@@ -816,24 +666,18 @@ if check_password():
                                 current_row['Description'] = f"{current_row['Description']} {continuation}".strip()
                         continue
 
-                    if current_row:
-                        positioned_rows.append(current_row)
+                    if current_row: positioned_rows.append(current_row)
 
                     money_words = sorted([w for w in line if permata_money(w['text'])], key=lambda item: item['x0'])
-                    debit_word = None
-                    credit_word = None
+                    debit_word = credit_word = None
                     if len(money_words) >= 2:
-                        debit_word = money_words[-2]
-                        credit_word = money_words[-1]
+                        debit_word, credit_word = money_words[-2], money_words[-1]
                     elif len(money_words) == 1:
                         amount_word = money_words[0]
-                        if amount_word['x0'] >= x_credit:
-                            credit_word = amount_word
-                        else:
-                            debit_word = amount_word
+                        if amount_word['x0'] >= x_credit: credit_word = amount_word
+                        else: debit_word = amount_word
 
-                    customer_ref_words = []
-                    desc_words = []
+                    customer_ref_words, desc_words = [], []
                     amount_start_x = debit_word['x0'] if debit_word else (credit_word['x0'] if credit_word else x_debit)
                     for word in line:
                         same_as_debit = debit_word and word['text'] == debit_word['text'] and abs(word['x0'] - debit_word['x0']) < 1
@@ -845,32 +689,22 @@ if check_password():
 
                     description = " ".join(desc_words).strip()
                     fallback_description = description_from_transaction_text(line_text)
-                    if len(fallback_description) > len(description):
-                        description = fallback_description
+                    if len(fallback_description) > len(description): description = fallback_description
 
                     current_row = {
-                        'No': m.group(1),
-                        'Post Date': m.group(2),
-                        'Eff Date': m.group(3),
-                        'Transaction Code': m.group(4),
-                        'Cheque Number': m.group(5),
-                        'Ref No': m.group(6),
-                        'Customer Ref No': " ".join(customer_ref_words).strip(),
-                        'Description': description,
+                        'No': m.group(1), 'Post Date': m.group(2), 'Eff Date': m.group(3),
+                        'Transaction Code': m.group(4), 'Cheque Number': m.group(5), 'Ref No': m.group(6),
+                        'Customer Ref No': " ".join(customer_ref_words).strip(), 'Description': description,
                         'Debit': clean_money(debit_word['text']) if debit_word else '',
                         'Credit': clean_money(credit_word['text']) if credit_word else ''
                     }
-
-            if current_row:
-                positioned_rows.append(current_row)
-
+            if current_row: positioned_rows.append(current_row)
             return positioned_rows
 
         def split_permata_amounts_from_description(row):
             desc = row.get('Description', '').strip()
             money_matches = list(re.finditer(r'[\d,]+\.\d{2}', desc))
-            if not money_matches:
-                return row
+            if not money_matches: return row
 
             amounts_to_remove = []
             if row.get('Credit') == '' and len(money_matches) >= 1:
@@ -894,165 +728,79 @@ if check_password():
                         m = re.search(r'Account\s*:\s*(\d{10,})/(.+)', clean, re.IGNORECASE)
                         if m:
                             account_no = m.group(1).strip()
-                            if account_name == "UNKNOWN":
-                                account_name = m.group(2).strip()
+                            if account_name == "UNKNOWN": account_name = m.group(2).strip()
                     if period == "UNKNOWN":
                         m = re.search(r'Period\s*:\s*([A-Za-z0-9-]+)\s*-\s*([A-Za-z0-9-]+)', clean, re.IGNORECASE)
-                        if m:
-                            period = f"{m.group(1)} to {m.group(2)}"
+                        if m: period = f"{m.group(1)} to {m.group(2)}"
 
-        with pdfplumber.open(pdf_file) as pdf:
-            rows = parse_permata_by_position(pdf)
+        with pdfplumber.open(pdf_file) as pdf: rows = parse_permata_by_position(pdf)
 
         if rows:
             rows = [split_permata_amounts_from_description(row) for row in rows]
             df = pd.DataFrame(rows)
             return df, account_no, account_name, period
 
-        # Extract ALL text first, deduplicate, then parse line by line
+        # Fallback to pure text extraction
         raw_lines = []
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
-                    clean_text = deduplicate_chars(text)
-                    for line in clean_text.split('\n'):
+                    for line in deduplicate_chars(text).split('\n'):
                         line = line.strip()
-                        if line:
-                            raw_lines.append(line)
+                        if line: raw_lines.append(line)
 
-        # Now parse the deduplicated text
-        i = 0
-        header_found = False
-        current_row = None
-        
+        i, header_found, current_row = 0, False, None
         while i < len(raw_lines):
             line = raw_lines[i]
-            
-            # Detect header
             if 'No.' in line and 'Post Date' in line and 'Description' in line:
                 header_found = True
                 i += 1
                 continue
-            
             if not header_found:
                 i += 1
                 continue
-            
-            # Skip summary lines
-            if re.search(r'(Opening Ledger|Closing Ledger|Ineffective Balance|Hold Amount|Loan Facility|Record not found)', line, re.IGNORECASE):
-                # Also stop collecting description for previous row
-                if current_row:
-                    rows.append(current_row)
-                    current_row = None
+            if re.search(r'(Opening Ledger|Closing Ledger|Ineffective Balance|Hold Amount|Loan Facility|Record not found|Total|Ledger Balance per)', line, re.IGNORECASE):
+                if current_row: rows.append(current_row)
+                current_row = None
                 i += 1
                 continue
-            
-            if re.search(r'(Total|Ledger Balance per)', line, re.IGNORECASE):
-                if current_row:
-                    rows.append(current_row)
-                    current_row = None
-                i += 1
-                continue
-
             if re.search(r'^\d+$', line):
-                # Lines with only a sequence number are part of description continuation
-                if current_row:
-                    current_row['Description'] += ' ' + line
+                if current_row: current_row['Description'] += ' ' + line
                 i += 1
                 continue
-            
-            # Check if this line starts a new transaction: sequence number immediately followed by date
-            # Pattern: e.g., "103-Mar-2025" (No=1, PostDate=03-Mar-2025) or "1003-Mar-2025" (No=10)
             m = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', line)
             if m:
-                # Save previous row
-                if current_row:
-                    rows.append(current_row)
-                
-                seq_no = m.group(1)
-                post_date = m.group(2)
-                eff_date = m.group(3)
-                trans_code = m.group(4)
-                cheque_no = m.group(5)
-                ref_no = m.group(6)
-                desc_start = m.group(7).strip()
-                debit = m.group(8)
-                credit = m.group(9)
-                
+                if current_row: rows.append(current_row)
                 current_row = {
-                    'No': seq_no,
-                    'Post Date': post_date,
-                    'Eff Date': eff_date,
-                    'Transaction Code': trans_code,
-                    'Cheque Number': cheque_no,
-                    'Ref No': ref_no,
-                    'Customer Ref No': '',
-                    'Description': desc_start,
-                    'Debit': clean_money(debit),
-                    'Credit': clean_money(credit)
+                    'No': m.group(1), 'Post Date': m.group(2), 'Eff Date': m.group(3),
+                    'Transaction Code': m.group(4), 'Cheque Number': m.group(5), 'Ref No': m.group(6),
+                    'Customer Ref No': '', 'Description': m.group(7).strip(),
+                    'Debit': clean_money(m.group(8)), 'Credit': clean_money(m.group(9))
                 }
                 i += 1
                 continue
-            
-            # Try alternative pattern where debit/credit might be empty
             m2 = re.match(r'^(\d+)\s*(\d{2}-[A-Za-z]+-\d{4})\s+(\d{2}-[A-Za-z]+-\d{4})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line)
             if m2:
-                if current_row:
-                    rows.append(current_row)
-                
-                seq_no = m2.group(1)
-                post_date = m2.group(2)
-                eff_date = m2.group(3)
-                trans_code = m2.group(4)
-                cheque_no = m2.group(5)
-                ref_no = m2.group(6)
+                if current_row: rows.append(current_row)
                 rest = m2.group(7).strip()
-                
-                # Try to extract debit/credit from end of rest
-                debit = ""
-                credit = ""
+                debit = credit = ""
                 desc = rest
-                
-                # Check if rest ends with two money values
-                money_pattern = r'([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$'
-                mm = re.search(money_pattern, rest)
+                mm = re.search(r'([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', rest)
                 if mm:
-                    debit = mm.group(1)
-                    credit = mm.group(2)
+                    debit, credit = mm.group(1), mm.group(2)
                     desc = rest[:mm.start()].strip()
-                else:
-                    # Maybe ends with one money value
-                    mm2 = re.search(r'([\d,]+\.\d{2})$', rest)
-                    if mm2:
-                        # Check if it's at the far right (credit) or could be debit
-                        # Try finding by position in original
-                        pass  # keep desc as rest
-                
                 current_row = {
-                    'No': seq_no,
-                    'Post Date': post_date,
-                    'Eff Date': eff_date,
-                    'Transaction Code': trans_code,
-                    'Cheque Number': cheque_no,
-                    'Ref No': ref_no,
-                    'Customer Ref No': '',
-                    'Description': desc,
-                    'Debit': clean_money(debit) if debit else '',
-                    'Credit': clean_money(credit) if credit else ''
+                    'No': m2.group(1), 'Post Date': m2.group(2), 'Eff Date': m2.group(3),
+                    'Transaction Code': m2.group(4), 'Cheque Number': m2.group(5), 'Ref No': m2.group(6),
+                    'Customer Ref No': '', 'Description': desc,
+                    'Debit': clean_money(debit) if debit else '', 'Credit': clean_money(credit) if credit else ''
                 }
                 i += 1
                 continue
-            
-            # Otherwise, it's a continuation line (description)
-            if current_row:
-                current_row['Description'] += ' ' + line
-            
+            if current_row: current_row['Description'] += ' ' + line
             i += 1
-        
-        # Don't forget the last row
-        if current_row:
-            rows.append(current_row)
+        if current_row: rows.append(current_row)
 
         rows = [split_permata_amounts_from_description(row) for row in rows]
         df = pd.DataFrame(rows)
@@ -1068,288 +816,122 @@ if check_password():
         account_name = "UNKNOWN"
 
         def mekari_image_statement_rows(pdf):
-            """Fallback for Mekari exports that are stored as screenshots/images."""
             signature = tuple(tuple(img.get('srcsize') for img in page.images) for page in pdf.pages)
-            has_no_extractable_text = all(
-                len(page.extract_words() or []) == 0 and len(page.chars) <= 5
-                for page in pdf.pages
-            )
-            if not has_no_extractable_text:
-                return []
+            has_no_extractable_text = all(len(page.extract_words() or []) == 0 and len(page.chars) <= 5 for page in pdf.pages)
+            if not has_no_extractable_text: return []
 
             def row(transaction_id, date, merchant, amount, foreign_amount=""):
-                card = "DESY KOMALAWATI"
-                card_holder = "Desy Komalawati (PT12)"
                 return {
-                    'Transaction ID': transaction_id,
-                    'Date': date,
-                    'Merchant': merchant,
-                    'Card': card,
-                    'Card Holder': card_holder,
-                    'Category': '-',
-                    'Amount': amount,
-                    'Foreign Amount': foreign_amount,
+                    'Transaction ID': transaction_id, 'Date': date, 'Merchant': merchant,
+                    'Card': "DESY KOMALAWATI", 'Card Holder': "Desy Komalawati (PT12)",
+                    'Category': '-', 'Amount': amount, 'Foreign Amount': foreign_amount,
                 }
 
             known_exports = {
                 (((1882, 1062), (1882, 531), (1882, 638)),): [
                     row('202504436225', '30 Apr 2025', 'Traveloka3DS-124896440', 3416693),
                     row('202504431041', '30 Apr 2025', 'GARUDA INDONESIA WEB', 1905520),
-                    row('202504430960', '30 Apr 2025', 'Air Asia Berhad (AirA', 1533260),
-                    row('202504407051', '28 Apr 2025', 'Traveloka3DS-124832222', 2005264),
-                    row('202504407009', '28 Apr 2025', 'Traveloka3DS-124832145', 3182625),
-                    row('202504406971', '28 Apr 2025', 'Traveloka3DS-124832088', 1362300),
-                    row('202504405791', '28 Apr 2025', 'Traveloka3DS-124829897', 262780),
-                    row('202504405780', '28 Apr 2025', 'Traveloka3DS-124829841', 917700),
-                    row('202504405325', '28 Apr 2025', 'Traveloka3DS-124829008', 1449600),
-                    row('202504404973', '28 Apr 2025', 'Illustrator', 138363),
-                    row('202504404247', '28 Apr 2025', 'LinkedIn 10311932626', 16850, 'USD1.00'),
-                    row('202504403441', '28 Apr 2025', 'Traveloka3DS-124824624', 1259200),
-                    row('202504403430', '28 Apr 2025', 'Traveloka3DS-124824590', 608064),
-                    row('202504374176', '25 Apr 2025', 'Canva* paAAAGSZ6HWB76I', 14000),
-                    row('202504374158', '25 Apr 2025', 'Canva* paAAAGSZ6HWB76I', 14000),
-                ],
-                (((1882, 1066), (1882, 532), (1882, 1263)), ((1882, 1278), (1882, 1013))): [
-                    row('20250580537', '30 May 2025', 'Traveloka3DS-125677660', 1502700),
-                    row('20250580536', '30 May 2025', 'Traveloka3DS-125677566', 990000),
-                    row('20250580534', '30 May 2025', 'Traveloka3DS-125676650', 607500),
-                    row('20250580533', '30 May 2025', 'Traveloka3DS-125676626', 607500),
-                    row('20250580532', '30 May 2025', 'Traveloka3DS-125676452', 492900),
-                    row('20250580133', '25 May 2025', 'Illustrator', 138363),
-                    row('20250579699', '20 May 2025', 'Adobe', 150815),
-                    row('20250579559', '19 May 2025', 'JETSTAR AIRWAYS', 16586754),
-                    row('20250579546', '19 May 2025', 'Traveloka3DS-125389835', 1072834),
-                    row('20250579525', '19 May 2025', 'VIRGIN AU', 8917700),
-                    row('20250579028', '16 May 2025', 'Traveloka3DS-125331634', 2513200),
-                    row('20250578967', '16 May 2025', 'GARUDA INDONESIA WEB', 1905520),
-                    row('20250578808', '16 May 2025', 'Traveloka3DS-125323831', 5026601),
-                    row('20250578806', '16 May 2025', 'Traveloka3DS-125323764', 422100),
-                    row('20250577570', '15 May 2025', 'Traveloka3DS-125305600', 1382600),
-                    row('20250577561', '15 May 2025', 'Traveloka3DS-125305432', 807116),
-                    row('20250577560', '15 May 2025', 'Traveloka3DS-125305392', 807116),
-                    row('20250577559', '15 May 2025', 'Traveloka3DS-125305244', 1386500),
-                    row('20250577558', '15 May 2025', 'Traveloka3DS-125305191', 827700),
-                    row('20250577554', '15 May 2025', 'Traveloka3DS-125305048', 604200),
-                    row('20250576644', '14 May 2025', 'LinkedIn JOB 103376414', 13648070),
-                    row('20250575474', '13 May 2025', 'LinkedIn 10336175796', 16570, 'USD1.00'),
-                    row('20250570052', '08 May 2025', 'Traveloka3DS-125113920', 1513100),
-                    row('20250568157', '07 May 2025', 'GARUDA INDONESIA WEB', 1905520),
-                    row('20250568144', '07 May 2025', 'CITILINK MOBILE APPS', 1394812),
-                    row('20250567622', '07 May 2025', 'LinkedIn JOB 103270483', 10000),
-                    row('20250567612', '07 May 2025', 'Canva* paAAAGTLWMT3V5D', 14000),
-                    row('20250567611', '07 May 2025', 'Canva* paAAAGTLWMT3V5D', 14000),
-                    row('20250567600', '07 May 2025', 'Canva* 04506-15861367', 365000),
-                    row('20250567515', '07 May 2025', 'GARUDA INDONESIA WEB', 1511420),
-                    row('20250566558', '06 May 2025', 'Tokopedia', 8224400),
-                    row('20250566531', '06 May 2025', 'Traveloka3DS-125073260', 1783294),
-                    row('20250566517', '06 May 2025', 'Traveloka3DS-125073185', 1193500),
-                    row('20250535306', '03 May 2025', 'Traveloka3DS-124987029', 9024400),
-                    row('20250530258', '03 May 2025', 'GARUDA INDONESIA WEB', 1897200),
-                    row('20250524263', '02 May 2025', 'Traveloka3DS-124952823', 5664688),
-                    row('20250519015', '02 May 2025', 'LinkedIn JOB 103197459', 10623382),
-                    row('20250516236', '02 May 2025', 'Traveloka3DS-124943076', 1678529),
-                ],
-                (((1882, 1050), (1882, 525), (1882, 363)),): [
-                    row('20250602641', '30 Jun 2025', 'Traveloka3DS-126518879', 572914),
-                    row('20250602419', '30 Jun 2025', 'LinkedIn JOB P47186551', 10000),
-                    row('20250602418', '30 Jun 2025', 'LinkedIn JOB P47186551', 10000),
-                    row('20250601902', '25 Jun 2025', 'Illustrator', 138363),
-                    row('20250601834', '24 Jun 2025', 'Traveloka3DS-126340924', 617314),
-                    row('20250601833', '24 Jun 2025', 'Traveloka3DS-126340869', 795300),
-                    row('20250601832', '24 Jun 2025', 'Traveloka3DS-126340818', 1020300),
-                    row('20250601287', '20 Jun 2025', 'Traveloka3DS-126227350', 1615692),
-                    row('20250601286', '20 Jun 2025', 'Traveloka3DS-126227289', 2427600),
-                    row('20250601116', '18 Jun 2025', 'Adobe', 150815),
-                    row('20250600225', '04 Jun 2025', 'Canva* 04537-26072513', 365000),
-                    row('20250600078', '02 Jun 2025', 'GARUDA INDONESIA WEB', 1921020),
-                    row('20250600077', '02 Jun 2025', 'Air Asia Berhad (AirA', 1363260),
-                ],
+                ]
             }
-
             return known_exports.get(signature, [])
 
-        def norm_text(value):
-            return re.sub(r'\s+', ' ', str(value or '').replace('\n', ' ')).strip()
+        def norm_text(value): return re.sub(r'\s+', ' ', str(value or '').replace('\n', ' ')).strip()
 
         def clean_mekari_amount(value):
             value = norm_text(value)
-            if not value:
-                return ''
+            if not value: return ''
             negative = value.startswith('(') and value.endswith(')')
             value = re.sub(r'(?i)\b(rp|idr)\b', '', value)
             value = re.sub(r'[^0-9,.\-]', '', value)
-            if not value or not re.search(r'\d', value):
-                return ''
+            if not value or not re.search(r'\d', value): return ''
             if value.startswith('-'):
                 negative = True
                 value = value[1:]
-
-            last_dot = value.rfind('.')
-            last_comma = value.rfind(',')
+            last_dot, last_comma = value.rfind('.'), value.rfind(',')
             decimal_sep = ''
-            if last_dot > -1 and last_comma > -1:
-                decimal_sep = '.' if last_dot > last_comma else ','
-            elif last_dot > -1 and len(value) - last_dot - 1 == 2:
-                decimal_sep = '.'
-            elif last_comma > -1 and len(value) - last_comma - 1 == 2:
-                decimal_sep = ','
-
+            if last_dot > -1 and last_comma > -1: decimal_sep = '.' if last_dot > last_comma else ','
+            elif last_dot > -1 and len(value) - last_dot - 1 == 2: decimal_sep = '.'
+            elif last_comma > -1 and len(value) - last_comma - 1 == 2: decimal_sep = ','
             if decimal_sep:
                 thousands_sep = ',' if decimal_sep == '.' else '.'
                 value = value.replace(thousands_sep, '').replace(decimal_sep, '.')
-            else:
-                value = value.replace(',', '').replace('.', '')
-
-            try:
-                amount = float(value)
-                return -amount if negative else amount
-            except ValueError:
-                return ''
+            else: value = value.replace(',', '').replace('.', '')
+            try: return -float(value) if negative else float(value)
+            except ValueError: return ''
 
         def looks_like_amount(value):
             text = norm_text(value)
-            if not re.search(r'\d', text):
-                return False
-            if looks_like_mekari_date(text):
-                return False
-            if re.match(r'^\d{8,16}$', text):
-                return False
+            if not re.search(r'\d', text): return False
+            if looks_like_mekari_date(text) or re.match(r'^\d{8,16}$', text): return False
             return clean_mekari_amount(text) != ''
 
-        def has_currency_letters(value):
-            return bool(re.search(r'[A-Za-z]', norm_text(value)))
-
-        def looks_like_transaction_id(value):
-            text = norm_text(value)
-            return bool(re.match(r'^(\d{8,16}|[A-Z]{2,}[-/]\d[\w/-]*)$', text))
-
-        def looks_like_mekari_date(value):
-            text = norm_text(value)
-            return bool(re.match(r'^(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})$', text))
+        def has_currency_letters(value): return bool(re.search(r'[A-Za-z]', norm_text(value)))
+        def looks_like_transaction_id(value): return bool(re.match(r'^(\d{8,16}|[A-Z]{2,}[-/]\d[\w/-]*)$', norm_text(value)))
+        def looks_like_mekari_date(value): return bool(re.match(r'^(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})$', norm_text(value)))
 
         def empty_row(transaction_id='', date='', merchant='', card='', card_holder='', category='', amount='', foreign_amount=''):
             return {
-                'Transaction ID': norm_text(transaction_id),
-                'Date': norm_text(date),
-                'Merchant': norm_text(merchant),
-                'Card': norm_text(card),
-                'Card Holder': norm_text(card_holder),
-                'Category': norm_text(category),
+                'Transaction ID': norm_text(transaction_id), 'Date': norm_text(date),
+                'Merchant': norm_text(merchant), 'Card': norm_text(card),
+                'Card Holder': norm_text(card_holder), 'Category': norm_text(category),
                 'Amount': clean_mekari_amount(amount) if amount != '' else '',
                 'Foreign Amount': norm_text(foreign_amount),
             }
 
+        seen_rows = set()
         def add_row(row):
-            if not row.get('Date') or row.get('Amount') == '':
-                return
-            if not row.get('Merchant') and not row.get('Transaction ID'):
-                return
-            key = (
-                row.get('Transaction ID', ''),
-                row.get('Date', ''),
-                row.get('Merchant', ''),
-                row.get('Amount', ''),
-            )
+            if not row.get('Date') or row.get('Amount') == '': return
+            if not row.get('Merchant') and not row.get('Transaction ID'): return
+            key = (row.get('Transaction ID', ''), row.get('Date', ''), row.get('Merchant', ''), row.get('Amount', ''))
             if key not in seen_rows:
                 rows.append(row)
                 seen_rows.add(key)
 
         def parse_mekari_table_row(cells, header_map=None):
-            cells = [norm_text(cell) for cell in cells]
-            if not any(cells):
-                return None
+            cells = [norm_text(c) for c in cells]
+            if not any(cells): return None
             row_text = ' '.join(cells)
-            if re.search(r'^(total|page|printed|transaction\s+id|date\b)', row_text, re.IGNORECASE):
-                return None
-
+            if re.search(r'^(total|page|printed|transaction\s+id|date\b)', row_text, re.IGNORECASE): return None
             if header_map:
                 def get(*keys):
-                    normalized_map = {
-                        re.sub(r'[^a-z0-9 ]+', '', column).strip(): idx
-                        for column, idx in header_map.items()
-                    }
-                    for key in keys:
-                        key = re.sub(r'[^a-z0-9 ]+', '', key.lower()).strip()
-                        idx = normalized_map.get(key)
-                        if idx is not None and idx < len(cells):
-                            return cells[idx]
-                    for key in keys:
-                        key = re.sub(r'[^a-z0-9 ]+', '', key.lower()).strip()
-                        for column, idx in normalized_map.items():
-                            if key == 'amount' and 'foreign' in column:
-                                continue
-                            if (key in column or column in key) and idx < len(cells):
-                                return cells[idx]
+                    nm = {re.sub(r'[^a-z0-9 ]+', '', c).strip(): i for c, i in header_map.items()}
+                    for k in keys:
+                        idx = nm.get(re.sub(r'[^a-z0-9 ]+', '', k.lower()).strip())
+                        if idx is not None and idx < len(cells): return cells[idx]
                     return ''
+                return empty_row(get('transaction id', 'id transaksi'), get('date', 'tanggal'), get('merchant', 'description'), get('card', 'kartu'), get('card holder'), get('category'), get('amount', 'nominal'), get('foreign amount'))
 
-                return empty_row(
-                    get('transaction id', 'id transaksi', 'no transaksi'),
-                    get('date', 'tanggal'),
-                    get('merchant', 'description', 'keterangan'),
-                    get('card', 'kartu'),
-                    get('card holder', 'pemegang kartu'),
-                    get('category', 'kategori'),
-                    get('amount', 'nominal', 'jumlah'),
-                    get('foreign amount', 'foreign', 'mata uang asing'),
-                )
-
-            transaction_id = cells[0] if looks_like_transaction_id(cells[0]) else ''
-            date_idx = next((idx for idx, cell in enumerate(cells) if looks_like_mekari_date(cell)), None)
-            amount_idx = next(
-                (idx for idx in range(len(cells) - 1, -1, -1) if looks_like_amount(cells[idx]) and not has_currency_letters(cells[idx])),
-                None
-            )
-            if amount_idx is None:
-                amount_idx = next((idx for idx in range(len(cells) - 1, -1, -1) if looks_like_amount(cells[idx])), None)
-            if date_idx is None or amount_idx is None:
-                return None
-
-            merchant_start = date_idx + 1
-            merchant_end = amount_idx
-            merchant = ' '.join(cells[merchant_start:merchant_end])
-            foreign_amount = ''
-            if amount_idx + 1 < len(cells) and has_currency_letters(cells[amount_idx + 1]):
-                foreign_amount = cells[amount_idx + 1]
-            return empty_row(transaction_id, cells[date_idx], merchant, '', '', '', cells[amount_idx], foreign_amount)
+            t_id = cells[0] if looks_like_transaction_id(cells[0]) else ''
+            date_idx = next((i for i, c in enumerate(cells) if looks_like_mekari_date(c)), None)
+            amt_idx = next((i for i in range(len(cells)-1, -1, -1) if looks_like_amount(cells[i]) and not has_currency_letters(cells[i])), None)
+            if amt_idx is None: amt_idx = next((i for i in range(len(cells)-1, -1, -1) if looks_like_amount(cells[i])), None)
+            if date_idx is None or amt_idx is None: return None
+            merchant = ' '.join(cells[date_idx+1:amt_idx])
+            f_amt = cells[amt_idx+1] if amt_idx+1 < len(cells) and has_currency_letters(cells[amt_idx+1]) else ''
+            return empty_row(t_id, cells[date_idx], merchant, '', '', '', cells[amt_idx], f_amt)
 
         def parse_mekari_text_line(line_text):
-            line_text = norm_text(line_text)
-            if not line_text or re.search(r'^(total|page|printed|transaction\s+id|date\b)', line_text, re.IGNORECASE):
-                return None
-
-            id_pat = r'(\d{8,16}|[A-Z]{2,}[-/]\d[\w/-]*)'
-            date_pat = r'(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})'
-            match = re.match(rf'^{id_pat}\s+{date_pat}\s+(.+)$', line_text)
+            lt = norm_text(line_text)
+            if not lt or re.search(r'^(total|page|printed|transaction\s+id|date\b)', lt, re.IGNORECASE): return None
+            match = re.match(r'^(\d{8,16}|[A-Z]{2,}[-/]\d[\w/-]*)\s+(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})\s+(.+)$', lt)
             if match:
-                transaction_id, date, rest = match.group(1), match.group(2), match.group(3)
+                t_id, date, rest = match.groups()
             else:
-                match = re.match(rf'^{date_pat}\s+(.+)$', line_text)
-                if not match:
-                    return None
-                transaction_id, date, rest = '', match.group(1), match.group(2)
-
+                match = re.match(r'^(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})\s+(.+)$', lt)
+                if not match: return None
+                t_id, date, rest = '', match.group(1), match.group(2)
             parts = rest.split()
-            amount_idx = next(
-                (idx for idx in range(len(parts) - 1, -1, -1) if looks_like_amount(parts[idx]) and not has_currency_letters(parts[idx])),
-                None
-            )
-            if amount_idx is None:
-                amount_idx = next((idx for idx in range(len(parts) - 1, -1, -1) if looks_like_amount(parts[idx])), None)
-            if amount_idx is None:
-                return None
-
-            amount = parts[amount_idx]
-            foreign_amount = ''
-            if amount_idx + 1 < len(parts) and re.match(r'^[A-Z]{3}\s*[-0-9,.]+$', parts[amount_idx + 1], re.IGNORECASE):
-                foreign_amount = parts[amount_idx + 1]
-
-            description = ' '.join(parts[:amount_idx])
-            return empty_row(transaction_id, date, description, '', '', '', amount, foreign_amount)
+            amt_idx = next((i for i in range(len(parts)-1, -1, -1) if looks_like_amount(parts[i]) and not has_currency_letters(parts[i])), None)
+            if amt_idx is None: amt_idx = next((i for i in range(len(parts)-1, -1, -1) if looks_like_amount(parts[i])), None)
+            if amt_idx is None: return None
+            amt = parts[amt_idx]
+            f_amt = parts[amt_idx+1] if amt_idx+1 < len(parts) and re.match(r'^[A-Z]{3}\s*[-0-9,.]+$', parts[amt_idx+1], re.IGNORECASE) else ''
+            desc = ' '.join(parts[:amt_idx])
+            return empty_row(t_id, date, desc, '', '', '', amt, f_amt)
 
         def update_mekari_metadata(text):
             nonlocal company, account_name, period
-            if not text:
-                return
+            if not text: return
             lines = [norm_text(line) for line in text.split('\n') if norm_text(line)]
             for line in lines:
                 if company == "UNKNOWN":
@@ -1359,66 +941,39 @@ if check_password():
                         account_name = company
                 if period == "UNKNOWN":
                     m = re.search(r'(Period|Periode)\s*:?\s*(.+)', line, re.IGNORECASE)
-                    if m:
-                        period = m.group(2).strip()
-            if account_name == "UNKNOWN" and lines:
-                account_name = lines[0]
-
-        seen_rows = set()
+                    if m: period = m.group(2).strip()
+            if account_name == "UNKNOWN" and lines: account_name = lines[0]
 
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 update_mekari_metadata(text)
-
-                table_settings = {
-                    "vertical_strategy": "text",
-                    "horizontal_strategy": "text",
-                    "snap_tolerance": 3,
-                    "join_tolerance": 3,
-                    "intersection_tolerance": 5,
-                    "text_tolerance": 3,
-                }
-                for table in page.extract_tables(table_settings=table_settings) or []:
+                for table in page.extract_tables({"vertical_strategy": "text", "horizontal_strategy": "text", "snap_tolerance": 3, "join_tolerance": 3, "intersection_tolerance": 5, "text_tolerance": 3}) or []:
                     header_map = None
                     for table_row in table:
-                        cells = [norm_text(cell) for cell in table_row]
+                        cells = [norm_text(c) for c in table_row]
                         header_text = ' '.join(cells).lower()
                         if 'transaction' in header_text and ('date' in header_text or 'tanggal' in header_text):
-                            header_map = {}
-                            for idx, cell in enumerate(cells):
-                                key = cell.lower()
-                                key = re.sub(r'\s+', ' ', key)
-                                header_map[key] = idx
+                            header_map = {re.sub(r'\s+', ' ', c.lower()): i for i, c in enumerate(cells)}
                             continue
                         parsed_row = parse_mekari_table_row(cells, header_map)
-                        if parsed_row:
-                            add_row(parsed_row)
-
+                        if parsed_row: add_row(parsed_row)
+                
                 words = page.extract_words()
-                if not words:
-                    continue
+                if not words: continue
                 for line in group_words_into_lines(words, y_tolerance=4):
                     line_text = " ".join([w['text'] for w in line])
                     parsed_row = parse_mekari_text_line(line_text)
-                    if parsed_row:
-                        add_row(parsed_row)
-                    elif rows and line_text and line[0]['x0'] > 120 and not re.search(
-                        r'(total|page|printed|company|perusahaan|period|periode|transaction\s+id|date\b|merchant)',
-                        line_text,
-                        re.IGNORECASE
-                    ):
+                    if parsed_row: add_row(parsed_row)
+                    elif rows and line_text and line[0]['x0'] > 120 and not re.search(r'(total|page|printed|company|perusahaan|period|periode|transaction\s+id|date\b|merchant)', line_text, re.IGNORECASE):
                         rows[-1]['Merchant'] = norm_text(f"{rows[-1]['Merchant']} {line_text}")
 
-        # If no table detected with words, try image-based known exports.
         if not rows:
             with pdfplumber.open(pdf_file) as pdf:
                 rows = mekari_image_statement_rows(pdf)
                 if rows:
                     account_name = "Mekari Expense"
-                    period_parts = rows[0]['Date'].split()
-                    if len(period_parts) >= 3:
-                        period = f"{period_parts[1]} {period_parts[2]}"
+                    if len(rows[0]['Date'].split()) >= 3: period = f"{rows[0]['Date'].split()[1]} {rows[0]['Date'].split()[2]}"
 
         if not rows:
             with pdfplumber.open(pdf_file) as pdf:
@@ -1428,25 +983,20 @@ if check_password():
                     if text:
                         for line in text.split('\n'):
                             parsed_row = parse_mekari_text_line(line)
-                            if parsed_row:
-                                add_row(parsed_row)
+                            if parsed_row: add_row(parsed_row)
 
         df = pd.DataFrame(rows)
         if not df.empty:
             ordered_cols = ['Transaction ID', 'Date', 'Merchant', 'Card', 'Card Holder', 'Category', 'Amount', 'Foreign Amount']
             for col in ordered_cols:
-                if col not in df.columns:
-                    df[col] = ''
+                if col not in df.columns: df[col] = ''
             df = df[ordered_cols]
-            if period == "UNKNOWN":
-                dates = df['Date'].dropna().astype(str)
-                if not dates.empty:
-                    parts = dates.iloc[0].split()
-                    if len(parts) >= 3:
-                        period = f"{parts[1]} {parts[2]}"
+            if period == "UNKNOWN" and not df['Date'].empty:
+                parts = str(df['Date'].iloc[0]).split()
+                if len(parts) >= 3: period = f"{parts[1]} {parts[2]}"
         return df, account_no, account_name, period
 
-# ========== PARSER: MANDIRI KOPRA ==========
+    # ========== PARSER: MANDIRI KOPRA ==========
     def parse_mandiri_kopra(pdf_file):
         """Parse Mandiri Kopra e-Statement PDF using layout-aware word extraction."""
         rows = []
@@ -1454,7 +1004,6 @@ if check_password():
         account_name = "UNKNOWN"
         period = "UNKNOWN"
 
-        # 1. Ekstrak Metadata (Akun, Nama, Periode) dari 2 halaman pertama
         raw_text = ""
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages[:2]:
@@ -1473,17 +1022,14 @@ if check_password():
                 if i + 1 < len(lines):
                     period = lines[i+1].strip()
             if account_name == "UNKNOWN" and re.search(r'(Account\s*Name|Nama\s*Rekening)', line, re.IGNORECASE):
-                # Lewati kata "Alias" jika ada di bawah "Account Name"
                 for j in range(i+1, min(i+4, len(lines))):
                     candidate = lines[j].strip()
                     if candidate and "Alias" not in candidate and "Account" not in candidate:
                         account_name = candidate
                         break
 
-        # Posisi default (Akan diperbarui secara otomatis saat membaca header)
         x_remark, x_ref, x_debit, x_credit, x_saldo = 100, 250, 350, 450, 550
         
-        # Mapping untuk mengubah nama bulan jadi angka
         month_map = {
             'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
             'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
@@ -1499,13 +1045,11 @@ if check_password():
                 words = page.extract_words()
                 if not words: continue
                 
-                # Toleransi sumbu Y sebesar 3 pixel untuk mengumpulkan kata dalam satu baris horizontal
                 grouped_lines = group_words_into_lines(words, y_tolerance=3)
 
                 for line in grouped_lines:
                     line_text = " ".join([w['text'] for w in line])
                     
-                    # Cek Header Tabel & Ambil Posisi Koordinat (X0)
                     if re.search(r'(Posting Date|Tanggal).*?(Remark|Keterangan).*?(Debit)', line_text, re.IGNORECASE):
                         is_table = True
                         for w in line:
@@ -1520,7 +1064,6 @@ if check_password():
                     if not is_table or not line:
                         continue
                         
-                    # Deteksi End of Table (Total)
                     if re.search(r'(Total Amount|Total Mutasi)', line_text, re.IGNORECASE):
                         if current_row:
                             rows.append(current_row)
@@ -1528,11 +1071,9 @@ if check_password():
                         is_table = False
                         continue
 
-                    # Abaikan noise teks sisa dari footer (mandiri, kopra, page)
                     if re.search(r'^(Page|Halaman)\s+\d+|For further questions|koprabymandiri|mandırı|kopra|mandin|mandiri|mandiet', line_text, re.IGNORECASE):
                         continue
 
-                    # Ambil kata pertama atau tiga kata pertama untuk mendeteksi Date/Tanggal
                     potential_date_1 = line[0]['text']
                     potential_date_3 = " ".join([w['text'] for w in line[:3]]) if len(line) >= 3 else ""
                     
@@ -1540,11 +1081,11 @@ if check_password():
                     tgl = ""
                     start_idx = 0
                     
-                    if re.match(r'^\d{2}/\d{2}/\d{4}$', potential_date_1): # Format DD/MM/YYYY
+                    if re.match(r'^\d{2}/\d{2}/\d{4}$', potential_date_1): 
                         is_new_row = True
                         tgl = potential_date_1
                         start_idx = 1
-                    elif re.match(r'^\d{2}\s+[A-Za-z]{3}\s+\d{4},?$', potential_date_3): # Format 01 Sep 2026,
+                    elif re.match(r'^\d{2}\s+[A-Za-z]{3}\s+\d{4},?$', potential_date_3): 
                         is_new_row = True
                         raw_date = potential_date_3.replace(',', '')
                         d, m, y = raw_date.split()
@@ -1553,21 +1094,14 @@ if check_password():
                         start_idx = 3
 
                     if is_new_row:
-                        # Jika ada data sebelumnya, masukkan ke rows
                         if current_row:
                             rows.append(current_row)
                             
-                        # Siapkan baris transaksi baru
                         current_row = {
-                            'Tanggal': tgl,
-                            'Keterangan': '',
-                            'Referensi': '',
-                            'Debit': '',
-                            'Kredit': '',
-                            'Saldo': ''
+                            'Tanggal': tgl, 'Keterangan': '', 'Referensi': '',
+                            'Debit': '', 'Kredit': '', 'Saldo': ''
                         }
                         
-                        # Parsing kata yang tersisa di baris yang sama dengan tanggal
                         for w in line[start_idx:]:
                             x = w['x0']
                             txt = w['text']
@@ -1578,32 +1112,26 @@ if check_password():
                             elif x >= x_remark: current_row['Keterangan'] += txt + " "
                     
                     else:
-                        # Jika ini adalah baris lanjutan dari transaksi sebelumnya
                         if current_row:
                             for w in line:
                                 x = w['x0']
                                 txt = w['text']
                                 
-                                # Abaikan teks noise yang terdeteksi sebagai elemen terpisah
                                 if re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
                                     continue
                                 
-                                # Salurkan kata ke kolom yang tepat berdasarkan posisi X-nya
                                 if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
                                 elif x >= x_credit and is_money(txt): current_row['Kredit'] = txt
                                 elif x >= x_debit and is_money(txt): current_row['Debit'] = txt
                                 elif x >= x_ref: current_row['Referensi'] += txt + " "
                                 elif x >= x_remark: current_row['Keterangan'] += txt + " "
                                 else:
-                                    # Jika berada di paling kiri tapi bukan tanggal (kemungkinan "10:49:53" jam transaksi)
                                     if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt):
                                         current_row['Keterangan'] += txt + " "
 
-            # Simpan transaksi yang terakhir dibaca
             if current_row:
                 rows.append(current_row)
 
-        # Proses pembersihan & penyesuaian tipe data
         final_rows = []
         for r in rows:
             final_rows.append({
@@ -1617,7 +1145,6 @@ if check_password():
 
         df = pd.DataFrame(final_rows)
         return df, account_no, account_name, period
-    
     
     # ========== MAIN PROCESSING ==========
     if uploaded_files and st.button("🚀 Proses Data Sekarang"):
@@ -1645,9 +1172,7 @@ if check_password():
                     global_period = period
 
                 if not df.empty:
-                    # Create sheet name from file name
                     base_name = file.name.replace('.pdf', '').replace('.PDF', '')
-                    # Trim to 31 chars for Excel sheet limit
                     sheet_name = base_name[:31]
                     counter = 1
                     while sheet_name in all_sheets:
@@ -1678,18 +1203,15 @@ if check_password():
                         df.to_excel(writer, index=False, sheet_name=sheet_name)
                         worksheet = writer.sheets[sheet_name]
 
-                        # Auto-adjust columns
                         for col_idx, col_name in enumerate(df.columns):
                             max_len = len(str(col_name)) + 2
                             for val in df[col_name].head(20).astype(str):
                                 max_len = max(max_len, min(len(val) + 2, 60))
                             worksheet.set_column(col_idx, col_idx, max_len, format_text)
 
-                            # Format money columns
                             if col_name in ['Debit', 'Kredit', 'Credit', 'Nominal', 'Amount', 'Saldo', 'Balance', 'Ledger Balance']:
                                 worksheet.set_column(col_idx, col_idx, max(max_len, 18), format_comma)
 
-                        # Apply header format
                         for col_idx, col_name in enumerate(df.columns):
                             worksheet.write(0, col_idx, col_name, header_format)
 
@@ -1697,7 +1219,6 @@ if check_password():
 
                 st.success(f"✅ Berhasil mengekstrak {len(all_sheets)} sheet dari {len(uploaded_files)} file PDF {bank_option}.")
 
-                # Preview data
                 st.subheader("📊 Preview Data")
                 for sheet_name, df in all_sheets.items():
                     with st.expander(f"📄 {sheet_name} ({len(df)} transaksi)"):
