@@ -996,7 +996,7 @@ if check_password():
                 if len(parts) >= 3: period = f"{parts[1]} {parts[2]}"
         return df, account_no, account_name, period
 
-    # ========== PARSER: MANDIRI KOPRA ==========
+# ========== PARSER: MANDIRI KOPRA ==========
     def parse_mandiri_kopra(pdf_file):
         """Parse Mandiri Kopra e-Statement PDF using layout-aware word extraction."""
         rows = []
@@ -1028,7 +1028,8 @@ if check_password():
                         account_name = candidate
                         break
 
-        x_remark, x_ref, x_debit, x_credit, x_saldo = 100, 250, 350, 450, 550
+        # Posisi default koordinat X untuk Mandiri Kopra
+        x_remark, x_ref, x_debit, x_credit, x_saldo = 100, 250, 380, 460, 540
         
         month_map = {
             'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
@@ -1105,10 +1106,13 @@ if check_password():
                         for w in line[start_idx:]:
                             x = w['x0']
                             txt = w['text']
+                            # Abaikan simbol strip tunggal (-) yang jadi pemisah kosong di PDF
+                            if txt == '-':
+                                continue
                             if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
-                            elif x >= x_credit and is_money(txt): current_row['Kredit'] = txt
-                            elif x >= x_debit and is_money(txt): current_row['Debit'] = txt
-                            elif x >= x_ref: current_row['Referensi'] += txt + " "
+                            elif x >= x_credit and (is_money(txt) or txt == '0.00'): current_row['Kredit'] = txt
+                            elif x >= x_debit and (is_money(txt) or txt == '0.00'): current_row['Debit'] = txt
+                            elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
                             elif x >= x_remark: current_row['Keterangan'] += txt + " "
                     
                     else:
@@ -1117,13 +1121,13 @@ if check_password():
                                 x = w['x0']
                                 txt = w['text']
                                 
-                                if re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
+                                if txt == '-' or re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
                                     continue
                                 
                                 if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
-                                elif x >= x_credit and is_money(txt): current_row['Kredit'] = txt
-                                elif x >= x_debit and is_money(txt): current_row['Debit'] = txt
-                                elif x >= x_ref: current_row['Referensi'] += txt + " "
+                                elif x >= x_credit and (is_money(txt) or txt == '0.00'): current_row['Kredit'] = txt
+                                elif x >= x_debit and (is_money(txt) or txt == '0.00'): current_row['Debit'] = txt
+                                elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
                                 elif x >= x_remark: current_row['Keterangan'] += txt + " "
                                 else:
                                     if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt):
@@ -1134,12 +1138,16 @@ if check_password():
 
         final_rows = []
         for r in rows:
+            # Format nilai debit dan kredit agar bersih
+            debit_val = r['Debit'].replace('0.00', '').strip()
+            kredit_val = r['Kredit'].replace('0.00', '').strip()
+
             final_rows.append({
                 'Tanggal': r['Tanggal'],
                 'Keterangan': r['Keterangan'].strip(),
                 'Referensi': r['Referensi'].strip(),
-                'Debit': clean_money(r['Debit']) if r['Debit'] else '',
-                'Kredit': clean_money(r['Kredit']) if r['Kredit'] else '',
+                'Debit': clean_money(debit_val) if debit_val else '',
+                'Kredit': clean_money(kredit_val) if kredit_val else '',
                 'Saldo': r['Saldo'].strip()
             })
 
