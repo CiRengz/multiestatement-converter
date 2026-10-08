@@ -38,7 +38,7 @@ if check_password():
     # ========== PILIH BANK ==========
     bank_option = st.selectbox(
         "Pilih Bank / Sumber e-Statement",
-        ["BCA", "BRI", "BNI", "OCBC NISP", "Permata", "Mekari (Jurnal)"]
+        ["BCA", "BRI", "BNI", "OCBC NISP", "Permata", "Mekari (Jurnal)", "Mandiri Kopra"]
     )
 
     uploaded_files = st.file_uploader(
@@ -1446,6 +1446,179 @@ if check_password():
                         period = f"{parts[1]} {parts[2]}"
         return df, account_no, account_name, period
 
+# ========== PARSER: MANDIRI KOPRA ==========
+    def parse_mandiri_kopra(pdf_file):
+        """Parse Mandiri Kopra e-Statement PDF using layout-aware word extraction."""
+        rows = []
+        account_no = "UNKNOWN"
+        account_name = "UNKNOWN"
+        period = "UNKNOWN"
+
+        # 1. Ekstrak Metadata (Akun, Nama, Periode) dari 2 halaman pertama
+        raw_text = ""
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages[:2]:
+                text = page.extract_text()
+                if text:
+                    raw_text += text + "\n"
+                    
+        lines = raw_text.split('\n')
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if account_no == "UNKNOWN" and re.search(r'(Account\s*No|Nomor\s*Rekening)', line, re.IGNORECASE):
+                if i + 1 < len(lines):
+                    m = re.search(r'(\d{10,})', lines[i+1])
+                    if m: account_no = m.group(1)
+            if period == "UNKNOWN" and re.search(r'(Period|Periode)', line, re.IGNORECASE):
+                if i + 1 < len(lines):
+                    period = lines[i+1].strip()
+            if account_name == "UNKNOWN" and re.search(r'(Account\s*Name|Nama\s*Rekening)', line, re.IGNORECASE):
+                # Lewati kata "Alias" jika ada di bawah "Account Name"
+                for j in range(i+1, min(i+4, len(lines))):
+                    candidate = lines[j].strip()
+                    if candidate and "Alias" not in candidate and "Account" not in candidate:
+                        account_name = candidate
+                        break
+
+        # Posisi default (Akan diperbarui secara otomatis saat membaca header)
+        x_remark, x_ref, x_debit, x_credit, x_saldo = 100, 250, 350, 450, 550
+        
+        # Mapping untuk mengubah nama bulan jadi angka
+        month_map = {
+            'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+            'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+            'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12',
+            'Mei': '05', 'Agt': '08', 'Okt': '10', 'Nop': '11', 'Des': '12'
+        }
+
+        with pdfplumber.open(pdf_file) as pdf:
+            is_table = False
+            current_row = None
+            
+            for page in pdf.pages:
+                words = page.extract_words()
+                if not words: continue
+                
+                # Toleransi sumbu Y sebesar 3 pixel untuk mengumpulkan kata dalam satu baris horizontal
+                grouped_lines = group_words_into_lines(words, y_tolerance=3)
+
+                for line in grouped_lines:
+                    line_text = " ".join([w['text'] for w in line])
+                    
+                    # Cek Header Tabel & Ambil Posisi Koordinat (X0)
+                    if re.search(r'(Posting Date|Tanggal).*?(Remark|Keterangan).*?(Debit)', line_text, re.IGNORECASE):
+                        is_table = True
+                        for w in line:
+                            txt = w['text'].lower()
+                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 5
+                            elif 'reference' in txt or 'referensi' in txt: x_ref = w['x0'] - 5
+                            elif 'debit' in txt: x_debit = w['x0'] - 5
+                            elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 5
+                            elif 'balance' in txt or 'saldo' in txt: x_saldo = w['x0'] - 5
+                        continue
+
+                    if not is_table or not line:
+                        continue
+                        
+                    # Deteksi End of Table (Total)
+                    if re.search(r'(Total Amount|Total Mutasi)', line_text, re.IGNORECASE):
+                        if current_row:
+                            rows.append(current_row)
+                            current_row = None
+                        is_table = False
+                        continue
+
+                    # Abaikan noise teks sisa dari footer (mandiri, kopra, page)
+                    if re.search(r'^(Page|Halaman)\s+\d+|For further questions|koprabymandiri|mandırı|kopra|mandin|mandiri|mandiet', line_text, re.IGNORECASE):
+                        continue
+
+                    # Ambil kata pertama atau tiga kata pertama untuk mendeteksi Date/Tanggal
+                    potential_date_1 = line[0]['text']
+                    potential_date_3 = " ".join([w['text'] for w in line[:3]]) if len(line) >= 3 else ""
+                    
+                    is_new_row = False
+                    tgl = ""
+                    start_idx = 0
+                    
+                    if re.match(r'^\d{2}/\d{2}/\d{4}$', potential_date_1): # Format DD/MM/YYYY
+                        is_new_row = True
+                        tgl = potential_date_1
+                        start_idx = 1
+                    elif re.match(r'^\d{2}\s+[A-Za-z]{3}\s+\d{4},?$', potential_date_3): # Format 01 Sep 2026,
+                        is_new_row = True
+                        raw_date = potential_date_3.replace(',', '')
+                        d, m, y = raw_date.split()
+                        m_num = month_map.get(m.capitalize(), '01')
+                        tgl = f"{d}/{m_num}/{y}"
+                        start_idx = 3
+
+                    if is_new_row:
+                        # Jika ada data sebelumnya, masukkan ke rows
+                        if current_row:
+                            rows.append(current_row)
+                            
+                        # Siapkan baris transaksi baru
+                        current_row = {
+                            'Tanggal': tgl,
+                            'Keterangan': '',
+                            'Referensi': '',
+                            'Debit': '',
+                            'Kredit': '',
+                            'Saldo': ''
+                        }
+                        
+                        # Parsing kata yang tersisa di baris yang sama dengan tanggal
+                        for w in line[start_idx:]:
+                            x = w['x0']
+                            txt = w['text']
+                            if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
+                            elif x >= x_credit and is_money(txt): current_row['Kredit'] = txt
+                            elif x >= x_debit and is_money(txt): current_row['Debit'] = txt
+                            elif x >= x_ref: current_row['Referensi'] += txt + " "
+                            elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                    
+                    else:
+                        # Jika ini adalah baris lanjutan dari transaksi sebelumnya
+                        if current_row:
+                            for w in line:
+                                x = w['x0']
+                                txt = w['text']
+                                
+                                # Abaikan teks noise yang terdeteksi sebagai elemen terpisah
+                                if re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
+                                    continue
+                                
+                                # Salurkan kata ke kolom yang tepat berdasarkan posisi X-nya
+                                if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
+                                elif x >= x_credit and is_money(txt): current_row['Kredit'] = txt
+                                elif x >= x_debit and is_money(txt): current_row['Debit'] = txt
+                                elif x >= x_ref: current_row['Referensi'] += txt + " "
+                                elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                                else:
+                                    # Jika berada di paling kiri tapi bukan tanggal (kemungkinan "10:49:53" jam transaksi)
+                                    if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt):
+                                        current_row['Keterangan'] += txt + " "
+
+            # Simpan transaksi yang terakhir dibaca
+            if current_row:
+                rows.append(current_row)
+
+        # Proses pembersihan & penyesuaian tipe data
+        final_rows = []
+        for r in rows:
+            final_rows.append({
+                'Tanggal': r['Tanggal'],
+                'Keterangan': r['Keterangan'].strip(),
+                'Referensi': r['Referensi'].strip(),
+                'Debit': clean_money(r['Debit']) if r['Debit'] else '',
+                'Kredit': clean_money(r['Kredit']) if r['Kredit'] else '',
+                'Saldo': r['Saldo'].strip()
+            })
+
+        df = pd.DataFrame(final_rows)
+        return df, account_no, account_name, period
+    
+    
     # ========== MAIN PROCESSING ==========
     if uploaded_files and st.button("🚀 Proses Data Sekarang"):
         with st.spinner("Sedang membaca dan memproses PDF..."):
@@ -1455,7 +1628,8 @@ if check_password():
                 "BNI": parse_bni,
                 "OCBC NISP": parse_ocbc,
                 "Permata": parse_permata,
-                "Mekari (Jurnal)": parse_mekari
+                "Mekari (Jurnal)": parse_mekari,
+                "Mandiri Kopra": parse_mandiri_kopra
             }
 
             parser = parser_map[bank_option]
