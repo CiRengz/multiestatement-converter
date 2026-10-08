@@ -998,7 +998,7 @@ if check_password():
 
 # ========== PARSER: MANDIRI KOPRA ==========
     def parse_mandiri_kopra(pdf_file):
-        """Parse Mandiri Kopra e-Statement PDF with corrected column alignment & number formatting."""
+        """Parse Mandiri Kopra e-Statement PDF using layout-aware word extraction."""
         rows = []
         account_no = "UNKNOWN"
         account_name = "UNKNOWN"
@@ -1021,6 +1021,138 @@ if check_password():
             if period == "UNKNOWN" and re.search(r'(Period|Periode)', line, re.IGNORECASE):
                 if i + 1 < len(lines):
                     period = lines[i+1].strip()
+            if account_name == "UNKNOWN" and re.search(r'(Account\s*Name|Nama\s*Rekening)', line, re.IGNORECASE):
+                for j in range(i+1, min(i+4, len(lines))):
+                    candidate = lines[j].strip()
+                    if candidate and "Alias" not in candidate and "Account" not in candidate:
+                        account_name = candidate
+                        break
+
+        # Posisi default koordinat X untuk Mandiri Kopra
+        x_remark, x_ref, x_debit, x_credit, x_saldo = 100, 250, 380, 460, 540
+        
+        month_map = {
+            'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+            'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+            'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12',
+            'Mei': '05', 'Agt': '08', 'Okt': '10', 'Nop': '11', 'Des': '12'
+        }
+
+        with pdfplumber.open(pdf_file) as pdf:
+            is_table = False
+            current_row = None
+            
+            for page in pdf.pages:
+                words = page.extract_words()
+                if not words: continue
+                
+                grouped_lines = group_words_into_lines(words, y_tolerance=3)
+
+                for line in grouped_lines:
+                    line_text = " ".join([w['text'] for w in line])
+                    
+                    if re.search(r'(Posting Date|Tanggal).*?(Remark|Keterangan).*?(Debit)', line_text, re.IGNORECASE):
+                        is_table = True
+                        for w in line:
+                            txt = w['text'].lower()
+                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 5
+                            elif 'reference' in txt or 'referensi' in txt: x_ref = w['x0'] - 5
+                            elif 'debit' in txt: x_debit = w['x0'] - 5
+                            elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 5
+                            elif 'balance' in txt or 'saldo' in txt: x_saldo = w['x0'] - 5
+                        continue
+
+                    if not is_table or not line:
+                        continue
+                        
+                    if re.search(r'(Total Amount|Total Mutasi)', line_text, re.IGNORECASE):
+                        if current_row:
+                            rows.append(current_row)
+                            current_row = None
+                        is_table = False
+                        continue
+
+                    if re.search(r'^(Page|Halaman)\s+\d+|For further questions|koprabymandiri|mandırı|kopra|mandin|mandiri|mandiet', line_text, re.IGNORECASE):
+                        continue
+
+                    potential_date_1 = line[0]['text']
+                    potential_date_3 = " ".join([w['text'] for w in line[:3]]) if len(line) >= 3 else ""
+                    
+                    is_new_row = False
+                    tgl = ""
+                    start_idx = 0
+                    
+                    if re.match(r'^\d{2}/\d{2}/\d{4}$', potential_date_1): 
+                        is_new_row = True
+                        tgl = potential_date_1
+                        start_idx = 1
+                    elif re.match(r'^\d{2}\s+[A-Za-z]{3}\s+\d{4},?$', potential_date_3): 
+                        is_new_row = True
+                        raw_date = potential_date_3.replace(',', '')
+                        d, m, y = raw_date.split()
+                        m_num = month_map.get(m.capitalize(), '01')
+                        tgl = f"{d}/{m_num}/{y}"
+                        start_idx = 3
+
+                    if is_new_row:
+                        if current_row:
+                            rows.append(current_row)
+                            
+                        current_row = {
+                            'Tanggal': tgl, 'Keterangan': '', 'Referensi': '',
+                            'Debit': '', 'Kredit': '', 'Saldo': ''
+                        }
+                        
+                        for w in line[start_idx:]:
+                            x = w['x0']
+                            txt = w['text']
+                            # Abaikan simbol strip tunggal (-) yang jadi pemisah kosong di PDF
+                            if txt == '-':
+                                continue
+                            if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
+                            elif x >= x_credit and (is_money(txt) or txt == '0.00'): current_row['Kredit'] = txt
+                            elif x >= x_debit and (is_money(txt) or txt == '0.00'): current_row['Debit'] = txt
+                            elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
+                            elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                    
+                    else:
+                        if current_row:
+                            for w in line:
+                                x = w['x0']
+                                txt = w['text']
+                                
+                                if txt == '-' or re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
+                                    continue
+                                
+                                if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
+                                elif x >= x_credit and (is_money(txt) or txt == '0.00'): current_row['Kredit'] = txt
+                                elif x >= x_debit and (is_money(txt) or txt == '0.00'): current_row['Debit'] = txt
+                                elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
+                                elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                                else:
+                                    if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt):
+                                        current_row['Keterangan'] += txt + " "
+
+            if current_row:
+                rows.append(current_row)
+
+        final_rows = []
+        for r in rows:
+            # Format nilai debit dan kredit agar bersih
+            debit_val = r['Debit'].replace('0.00', '').strip()
+            kredit_val = r['Kredit'].replace('0.00', '').strip()
+
+            final_rows.append({
+                'Tanggal': r['Tanggal'],
+                'Keterangan': r['Keterangan'].strip(),
+                'Referensi': r['Referensi'].strip(),
+                'Debit': clean_money(debit_val) if debit_val else '',
+                'Kredit': clean_money(kredit_val) if kredit_val else '',
+                'Saldo': r['Saldo'].strip()
+            })
+
+        df = pd.DataFrame(final_rows)
+        return df, account_no, account_name, period
     
     # ========== MAIN PROCESSING ==========
     if uploaded_files and st.button("🚀 Proses Data Sekarang"):
