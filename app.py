@@ -1028,7 +1028,7 @@ if check_password():
                         account_name = candidate
                         break
 
-        # Posisi default koordinat X untuk Mandiri Kopra (digeser ke kiri untuk antisipasi angka panjang)
+        # Koordinat X disesuaikan
         x_remark, x_ref, x_debit, x_credit, x_saldo = 90, 230, 310, 410, 510
         
         month_map = {
@@ -1038,7 +1038,7 @@ if check_password():
             'Mei': '05', 'Agt': '08', 'Okt': '10', 'Nop': '11', 'Des': '12'
         }
 
-        # Helper lokal: toleransi Y dinaikkan ke 6 untuk mencegah teks keterangan terpotong ke row sebelumnya
+        # Helper: Grup baris dengan toleransi Y agar teks sejajar tidak terpisah
         def local_group_words(words, y_tolerance=6):
             if not words: return []
             lines = []
@@ -1058,16 +1058,15 @@ if check_password():
                 lines.append(current_line)
             return lines
 
-        # Helper lokal: Pembersih ekstra jika angka memiliki spasi tersembunyi
         def is_money_local(t):
-            return bool(re.match(r'^[0-9,]+\.[0-9]{2}$', t.replace(' ', '').strip()))
+            return bool(re.match(r'^[0-9,]+\.[0-9]{2}$', t))
 
         with pdfplumber.open(pdf_file) as pdf:
             is_table = False
             current_row = None
             
             for page in pdf.pages:
-                # Toleransi sumbu X dilebarkan agar spasi antar digit dalam nominal tidak memecah angka
+                # Toleransi X dilebarkan agar spasi di dalam angka nominal tidak memutus nominalnya
                 words = page.extract_words(x_tolerance=5, keep_blank_chars=False)
                 if not words: continue
                 
@@ -1080,8 +1079,7 @@ if check_password():
                         is_table = True
                         for w in line:
                             txt = w['text'].lower()
-                            # Pengurangan area tangkap X diperbesar (hingga 70 point ke kiri) untuk angka besar
-                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 10
+                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 15
                             elif 'reference' in txt or 'referensi' in txt: x_ref = w['x0'] - 20
                             elif 'debit' in txt: x_debit = w['x0'] - 70 
                             elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 70
@@ -1098,27 +1096,26 @@ if check_password():
                         is_table = False
                         continue
 
-                    if re.search(r'^(Page|Halaman)\s+\d+|For further questions|koprabymandiri|mandırı|kopra|mandin|mandiri|mandiet', line_text, re.IGNORECASE):
+                    # BUG 2 FIX: Filter baris header "Account Statement" dan "Created..." di halaman selanjutnya
+                    if re.search(r'^(Page|Halaman)\s+\d+|For further questions|koprabymandiri|mandırı|kopra|mandin|mandiri|mandiet|Account Statement|Created\s+\d{2}\s+[a-zA-Z]{3}\s+\d{4}', line_text, re.IGNORECASE):
                         continue
 
-                    potential_date_1 = line[0]['text']
-                    potential_date_3 = " ".join([w['text'] for w in line[:3]]) if len(line) >= 3 else ""
+                    # Deteksi menggunakan regex teks satu baris penuh
+                    m_date1 = re.match(r'^(\d{2}/\d{2}/\d{4})', line_text)
+                    m_date2 = re.match(r'^(\d{2}\s+[A-Za-z]{3}\s+\d{4})', line_text)
                     
                     is_new_row = False
                     tgl = ""
-                    start_idx = 0
                     
-                    if re.match(r'^\d{2}/\d{2}/\d{4}$', potential_date_1): 
+                    if m_date1: 
                         is_new_row = True
-                        tgl = potential_date_1
-                        start_idx = 1
-                    elif re.match(r'^\d{2}\s+[A-Za-z]{3}\s+\d{4},?$', potential_date_3): 
+                        tgl = m_date1.group(1)
+                    elif m_date2: 
                         is_new_row = True
-                        raw_date = potential_date_3.replace(',', '')
+                        raw_date = m_date2.group(1).replace(',', '')
                         d, m, y = raw_date.split()
                         m_num = month_map.get(m.capitalize(), '01')
                         tgl = f"{d}/{m_num}/{y}"
-                        start_idx = 3
 
                     if is_new_row:
                         if current_row:
@@ -1128,39 +1125,33 @@ if check_password():
                             'Tanggal': tgl, 'Keterangan': '', 'Referensi': '',
                             'Debit': '', 'Kredit': '', 'Saldo': ''
                         }
-                        
-                        for w in line[start_idx:]:
+                    
+                    if current_row:
+                        # BUG 1 FIX: Seluruh kata di baris diproses berdasarkan letak koordinat X nya
+                        for w in line:
                             x = w['x0']
                             txt = w['text']
-                            if txt == '-': continue
                             
+                            # Abaikan sisa tulisan kopra/mandiri yang terpecah dan tanda hubung pemisah
+                            if txt == '-' or re.search(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
+                                continue
+                                
                             txt_clean = txt.replace(' ', '')
-                            # Batas area dipertegas agar tidak meluber
-                            if x >= x_saldo and is_money_local(txt): current_row['Saldo'] = txt_clean
-                            elif x >= x_credit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Kredit'] = txt_clean
-                            elif x >= x_debit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Debit'] = txt_clean
-                            elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
-                            elif x >= x_remark and x < x_ref: current_row['Keterangan'] += txt + " "
-                            else: current_row['Keterangan'] += txt + " "
-                    
-                    else:
-                        if current_row:
-                            for w in line:
-                                x = w['x0']
-                                txt = w['text']
-                                
-                                if txt == '-' or re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
-                                    continue
-                                
-                                txt_clean = txt.replace(' ', '')
-                                if x >= x_saldo and is_money_local(txt): current_row['Saldo'] = txt_clean
-                                elif x >= x_credit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Kredit'] = txt_clean
-                                elif x >= x_debit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Debit'] = txt_clean
-                                elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
-                                elif x >= x_remark and x < x_ref: current_row['Keterangan'] += txt + " "
-                                else:
-                                    if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt) and x < x_debit:
-                                        current_row['Keterangan'] += txt + " "
+                            
+                            # Distribusi teks ke dalam kolom berdasarkan titik potong X
+                            if x >= x_saldo and is_money_local(txt_clean): 
+                                current_row['Saldo'] = txt_clean
+                            elif x >= x_credit and (is_money_local(txt_clean) or txt_clean == '0.00'): 
+                                current_row['Kredit'] = txt_clean
+                            elif x >= x_debit and (is_money_local(txt_clean) or txt_clean == '0.00'): 
+                                current_row['Debit'] = txt_clean
+                            elif x >= x_ref and x < x_debit: 
+                                current_row['Referensi'] += txt + " "
+                            elif x >= x_remark and x < x_ref: 
+                                current_row['Keterangan'] += txt + " "
+                            elif x < x_remark:
+                                # Tulisan di kiri bawah tanggal (misal: "10:49:53") aman diabaikan
+                                pass
 
             if current_row:
                 rows.append(current_row)
