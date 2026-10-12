@@ -998,7 +998,7 @@ if check_password():
 
 # ========== PARSER: MANDIRI KOPRA ==========
     def parse_mandiri_kopra(pdf_file):
-        """Parse Mandiri Kopra e-Statement PDF using layout-aware word extraction."""
+        """Parse Mandiri Kopra e-Statement PDF using layout-aware extraction and Math Validation."""
         rows = []
         account_no = "UNKNOWN"
         account_name = "UNKNOWN"
@@ -1028,8 +1028,7 @@ if check_password():
                         account_name = candidate
                         break
 
-        # Koordinat X disesuaikan
-        x_remark, x_ref, x_debit, x_credit, x_saldo = 90, 230, 310, 410, 510
+        x_remark, x_ref, x_debit, x_credit, x_saldo = 70, 220, 310, 410, 510
         
         month_map = {
             'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
@@ -1038,7 +1037,6 @@ if check_password():
             'Mei': '05', 'Agt': '08', 'Okt': '10', 'Nop': '11', 'Des': '12'
         }
 
-        # Helper: Grup baris dengan toleransi Y agar teks sejajar tidak terpisah
         def local_group_words(words, y_tolerance=6):
             if not words: return []
             lines = []
@@ -1059,15 +1057,18 @@ if check_password():
             return lines
 
         def is_money_local(t):
-            return bool(re.match(r'^[0-9,]+\.[0-9]{2}$', t))
+            return bool(re.match(r'^[\d,]+\.\d{2}$', t))
 
+        raw_transactions = []
+        opening_balance = None
+        
         with pdfplumber.open(pdf_file) as pdf:
             is_table = False
             current_row = None
             
             for page in pdf.pages:
-                # Toleransi X dilebarkan agar spasi di dalam angka nominal tidak memutus nominalnya
-                words = page.extract_words(x_tolerance=5, keep_blank_chars=False)
+                # x_tolerance=7 berguna untuk menyambung angka yang ada spasi kecilnya
+                words = page.extract_words(x_tolerance=7, keep_blank_chars=False)
                 if not words: continue
                 
                 grouped_lines = local_group_words(words, y_tolerance=6)
@@ -1075,15 +1076,23 @@ if check_password():
                 for line in grouped_lines:
                     line_text = " ".join([w['text'] for w in line])
                     
+                    # Deteksi Opening Balance (Untuk Validasi Baris Pertama)
+                    if re.search(r'(Opening Balance|Saldo Awal)', line_text, re.IGNORECASE):
+                        for w in line:
+                            txt_clean = w['text'].replace(' ', '')
+                            if is_money_local(txt_clean):
+                                opening_balance = float(txt_clean.replace(',', ''))
+                    
                     if re.search(r'(Posting Date|Tanggal).*?(Remark|Keterangan).*?(Debit)', line_text, re.IGNORECASE):
                         is_table = True
                         for w in line:
                             txt = w['text'].lower()
-                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 15
+                            # FIXED BUG 1: Margin Remark ditarik jauh ke kiri (-30 point) agar teks pertama ('Gosend') selalu ketangkap
+                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 30
                             elif 'reference' in txt or 'referensi' in txt: x_ref = w['x0'] - 20
-                            elif 'debit' in txt: x_debit = w['x0'] - 70 
-                            elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 70
-                            elif 'balance' in txt or 'saldo' in txt: x_saldo = w['x0'] - 70
+                            elif 'debit' in txt: x_debit = w['x0'] - 60 
+                            elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 60
+                            elif 'balance' in txt or 'saldo' in txt: x_saldo = w['x0'] - 60
                         continue
 
                     if not is_table or not line:
@@ -1091,16 +1100,15 @@ if check_password():
                         
                     if re.search(r'(Total Amount|Total Mutasi)', line_text, re.IGNORECASE):
                         if current_row:
-                            rows.append(current_row)
+                            raw_transactions.append(current_row)
                             current_row = None
                         is_table = False
                         continue
 
-                    # BUG 2 FIX: Filter baris header "Account Statement" dan "Created..." di halaman selanjutnya
+                    # FIXED BUG 2: Buang Header di Halaman Baru yang numpang masuk Keterangan
                     if re.search(r'^(Page|Halaman)\s+\d+|For further questions|koprabymandiri|mandırı|kopra|mandin|mandiri|mandiet|Account Statement|Created\s+\d{2}\s+[a-zA-Z]{3}\s+\d{4}', line_text, re.IGNORECASE):
                         continue
 
-                    # Deteksi menggunakan regex teks satu baris penuh
                     m_date1 = re.match(r'^(\d{2}/\d{2}/\d{4})', line_text)
                     m_date2 = re.match(r'^(\d{2}\s+[A-Za-z]{3}\s+\d{4})', line_text)
                     
@@ -1119,7 +1127,7 @@ if check_password():
 
                     if is_new_row:
                         if current_row:
-                            rows.append(current_row)
+                            raw_transactions.append(current_row)
                             
                         current_row = {
                             'Tanggal': tgl, 'Keterangan': '', 'Referensi': '',
@@ -1127,47 +1135,115 @@ if check_password():
                         }
                     
                     if current_row:
-                        # BUG 1 FIX: Seluruh kata di baris diproses berdasarkan letak koordinat X nya
                         for w in line:
                             x = w['x0']
                             txt = w['text']
                             
-                            # Abaikan sisa tulisan kopra/mandiri yang terpecah dan tanda hubung pemisah
-                            if txt == '-' or re.search(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
+                            # Filter simbol pemisah atau sisa teks header
+                            if txt == '-' or re.search(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet', 'account', 'statement']:
                                 continue
                                 
                             txt_clean = txt.replace(' ', '')
                             
-                            # Distribusi teks ke dalam kolom berdasarkan titik potong X
-                            if x >= x_saldo and is_money_local(txt_clean): 
-                                current_row['Saldo'] = txt_clean
-                            elif x >= x_credit and (is_money_local(txt_clean) or txt_clean == '0.00'): 
-                                current_row['Kredit'] = txt_clean
-                            elif x >= x_debit and (is_money_local(txt_clean) or txt_clean == '0.00'): 
-                                current_row['Debit'] = txt_clean
-                            elif x >= x_ref and x < x_debit: 
-                                current_row['Referensi'] += txt + " "
-                            elif x >= x_remark and x < x_ref: 
-                                current_row['Keterangan'] += txt + " "
-                            elif x < x_remark:
-                                # Tulisan di kiri bawah tanggal (misal: "10:49:53") aman diabaikan
-                                pass
+                            # Penempatan teks ke kolom
+                            if is_money_local(txt_clean) or txt_clean == '0.00': 
+                                if x >= x_saldo: 
+                                    current_row['Saldo'] = txt_clean
+                                elif x >= x_credit: 
+                                    current_row['Kredit'] = txt_clean
+                                elif x >= x_debit: 
+                                    current_row['Debit'] = txt_clean
+                                else:
+                                    if x >= x_ref: current_row['Referensi'] += txt + " "
+                                    elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                            else:
+                                if x >= x_ref and x < x_debit: 
+                                    current_row['Referensi'] += txt + " "
+                                elif x >= x_remark and x < x_ref: 
+                                    current_row['Keterangan'] += txt + " "
 
             if current_row:
-                rows.append(current_row)
+                raw_transactions.append(current_row)
 
+        # =========================================================================
+        # FIXED BUG 3: RUNNING BALANCE CHECK (VALIDASI MATEMATIKA)
+        # =========================================================================
         final_rows = []
-        for r in rows:
-            debit_val = r['Debit'].replace('0.00', '').strip()
-            kredit_val = r['Kredit'].replace('0.00', '').strip()
+        
+        def to_float(val_str):
+            if not val_str: return 0.0
+            return float(val_str.replace(',', ''))
+            
+        # Konversi sementara ke bentuk Float
+        for r in raw_transactions:
+            r['Debit_F'] = to_float(r['Debit'])
+            r['Credit_F'] = to_float(r['Kredit'])
+            r['Saldo_F'] = to_float(r['Saldo'])
+            r['Fixed_Ket'] = r['Keterangan'].strip()
+            r['Fixed_Ref'] = r['Referensi'].strip()
 
+        # Validasi & Perbaikan Angka Baris Pertama (Menggunakan Opening Balance jika terbaca)
+        if opening_balance is not None and len(raw_transactions) > 0:
+            curr = raw_transactions[0]
+            math_saldo = round(opening_balance - curr['Debit_F'] + curr['Credit_F'], 2)
+            if abs(math_saldo - curr['Saldo_F']) > 0.01:
+                diff = round(curr['Saldo_F'] - opening_balance, 2)
+                if diff < 0:
+                    curr['Debit_F'] = abs(diff)
+                    curr['Credit_F'] = 0.0
+                elif diff > 0:
+                    curr['Debit_F'] = 0.0
+                    curr['Credit_F'] = abs(diff)
+                else:
+                    curr['Debit_F'] = 0.0
+                    curr['Credit_F'] = 0.0
+                # Overwrite teks asli dengan angka yang sudah 100% akurat
+                curr['Debit'] = f"{curr['Debit_F']:,.2f}"
+                curr['Kredit'] = f"{curr['Credit_F']:,.2f}"
+
+        # Validasi & Perbaikan Angka Baris ke-2 hingga Terakhir (Menggunakan Running Balance)
+        for i in range(len(raw_transactions)):
+            curr = raw_transactions[i]
+            
+            if i > 0:
+                prev = raw_transactions[i-1]
+                prev_saldo = prev['Saldo_F']
+                
+                # Cek jika hitungan matematika Saldo Awal - Debit + Kredit = Saldo Akhir tidak klop
+                math_saldo = round(prev_saldo - curr['Debit_F'] + curr['Credit_F'], 2)
+                
+                if abs(math_saldo - curr['Saldo_F']) > 0.01:
+                    # KETAHUAN ADA DIGIT YANG TERPOTONG, koreksi Debit & Kredit berdasarkan selisih Saldo
+                    diff = round(curr['Saldo_F'] - prev_saldo, 2)
+                    
+                    if diff < 0: # Saldo berkurang, pasti transaksi Debit
+                        true_debit = abs(diff)
+                        true_credit = 0.0
+                    elif diff > 0: # Saldo bertambah, pasti transaksi Kredit
+                        true_debit = 0.0
+                        true_credit = abs(diff)
+                    else:
+                        true_debit = 0.0
+                        true_credit = 0.0
+                        
+                    # Simpan dan overwrite teks aslinya
+                    curr['Debit_F'] = true_debit
+                    curr['Credit_F'] = true_credit
+                    curr['Debit'] = f"{true_debit:,.2f}"
+                    curr['Kredit'] = f"{true_credit:,.2f}"
+            
+            # Format pembersihan akhir untuk output Excel
+            debit_val = curr['Debit'].replace('0.00', '').strip()
+            kredit_val = curr['Kredit'].replace('0.00', '').strip()
+            saldo_val = curr['Saldo'].strip()
+            
             final_rows.append({
-                'Tanggal': r['Tanggal'],
-                'Keterangan': r['Keterangan'].strip(),
-                'Referensi': r['Referensi'].strip(),
+                'Tanggal': curr['Tanggal'],
+                'Keterangan': curr['Fixed_Ket'],
+                'Referensi': curr['Fixed_Ref'],
                 'Debit': clean_money(debit_val) if debit_val else '',
                 'Kredit': clean_money(kredit_val) if kredit_val else '',
-                'Saldo': r['Saldo'].strip()
+                'Saldo': clean_money(saldo_val) if saldo_val else ''
             })
 
         df = pd.DataFrame(final_rows)
