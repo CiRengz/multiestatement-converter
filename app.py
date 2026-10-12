@@ -1028,8 +1028,8 @@ if check_password():
                         account_name = candidate
                         break
 
-        # Posisi default koordinat X untuk Mandiri Kopra
-        x_remark, x_ref, x_debit, x_credit, x_saldo = 100, 250, 380, 460, 540
+        # Posisi default koordinat X untuk Mandiri Kopra (digeser ke kiri untuk antisipasi angka panjang)
+        x_remark, x_ref, x_debit, x_credit, x_saldo = 90, 230, 310, 410, 510
         
         month_map = {
             'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
@@ -1038,15 +1038,40 @@ if check_password():
             'Mei': '05', 'Agt': '08', 'Okt': '10', 'Nop': '11', 'Des': '12'
         }
 
+        # Helper lokal: toleransi Y dinaikkan ke 6 untuk mencegah teks keterangan terpotong ke row sebelumnya
+        def local_group_words(words, y_tolerance=6):
+            if not words: return []
+            lines = []
+            words = sorted(words, key=lambda w: w['top'])
+            current_line = []
+            current_top = words[0]['top']
+            for w in words:
+                if abs(w['top'] - current_top) <= y_tolerance:
+                    current_line.append(w)
+                else:
+                    current_line.sort(key=lambda x: x['x0'])
+                    lines.append(current_line)
+                    current_line = [w]
+                    current_top = w['top']
+            if current_line:
+                current_line.sort(key=lambda x: x['x0'])
+                lines.append(current_line)
+            return lines
+
+        # Helper lokal: Pembersih ekstra jika angka memiliki spasi tersembunyi
+        def is_money_local(t):
+            return bool(re.match(r'^[0-9,]+\.[0-9]{2}$', t.replace(' ', '').strip()))
+
         with pdfplumber.open(pdf_file) as pdf:
             is_table = False
             current_row = None
             
             for page in pdf.pages:
-                words = page.extract_words()
+                # Toleransi sumbu X dilebarkan agar spasi antar digit dalam nominal tidak memecah angka
+                words = page.extract_words(x_tolerance=5, keep_blank_chars=False)
                 if not words: continue
                 
-                grouped_lines = group_words_into_lines(words, y_tolerance=3)
+                grouped_lines = local_group_words(words, y_tolerance=6)
 
                 for line in grouped_lines:
                     line_text = " ".join([w['text'] for w in line])
@@ -1055,11 +1080,12 @@ if check_password():
                         is_table = True
                         for w in line:
                             txt = w['text'].lower()
-                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 5
-                            elif 'reference' in txt or 'referensi' in txt: x_ref = w['x0'] - 5
-                            elif 'debit' in txt: x_debit = w['x0'] - 5
-                            elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 5
-                            elif 'balance' in txt or 'saldo' in txt: x_saldo = w['x0'] - 5
+                            # Pengurangan area tangkap X diperbesar (hingga 70 point ke kiri) untuk angka besar
+                            if 'remark' in txt or 'keterangan' in txt: x_remark = w['x0'] - 10
+                            elif 'reference' in txt or 'referensi' in txt: x_ref = w['x0'] - 20
+                            elif 'debit' in txt: x_debit = w['x0'] - 70 
+                            elif 'credit' in txt or 'kredit' in txt: x_credit = w['x0'] - 70
+                            elif 'balance' in txt or 'saldo' in txt: x_saldo = w['x0'] - 70
                         continue
 
                     if not is_table or not line:
@@ -1106,14 +1132,16 @@ if check_password():
                         for w in line[start_idx:]:
                             x = w['x0']
                             txt = w['text']
-                            # Abaikan simbol strip tunggal (-) yang jadi pemisah kosong di PDF
-                            if txt == '-':
-                                continue
-                            if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
-                            elif x >= x_credit and (is_money(txt) or txt == '0.00'): current_row['Kredit'] = txt
-                            elif x >= x_debit and (is_money(txt) or txt == '0.00'): current_row['Debit'] = txt
+                            if txt == '-': continue
+                            
+                            txt_clean = txt.replace(' ', '')
+                            # Batas area dipertegas agar tidak meluber
+                            if x >= x_saldo and is_money_local(txt): current_row['Saldo'] = txt_clean
+                            elif x >= x_credit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Kredit'] = txt_clean
+                            elif x >= x_debit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Debit'] = txt_clean
                             elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
-                            elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                            elif x >= x_remark and x < x_ref: current_row['Keterangan'] += txt + " "
+                            else: current_row['Keterangan'] += txt + " "
                     
                     else:
                         if current_row:
@@ -1124,13 +1152,14 @@ if check_password():
                                 if txt == '-' or re.match(r'^(Page|Halaman)\s+\d+', txt, re.IGNORECASE) or txt.lower() in ['mandırı', 'kopra', 'mandiri', 'mandin', 'mandi', 'mandiet']:
                                     continue
                                 
-                                if x >= x_saldo and is_money(txt): current_row['Saldo'] = txt
-                                elif x >= x_credit and (is_money(txt) or txt == '0.00'): current_row['Kredit'] = txt
-                                elif x >= x_debit and (is_money(txt) or txt == '0.00'): current_row['Debit'] = txt
+                                txt_clean = txt.replace(' ', '')
+                                if x >= x_saldo and is_money_local(txt): current_row['Saldo'] = txt_clean
+                                elif x >= x_credit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Kredit'] = txt_clean
+                                elif x >= x_debit and (is_money_local(txt) or txt_clean == '0.00'): current_row['Debit'] = txt_clean
                                 elif x >= x_ref and x < x_debit: current_row['Referensi'] += txt + " "
-                                elif x >= x_remark: current_row['Keterangan'] += txt + " "
+                                elif x >= x_remark and x < x_ref: current_row['Keterangan'] += txt + " "
                                 else:
-                                    if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt):
+                                    if not re.match(r'^\d{2}:\d{2}:\d{2}$', txt) and x < x_debit:
                                         current_row['Keterangan'] += txt + " "
 
             if current_row:
@@ -1138,7 +1167,6 @@ if check_password():
 
         final_rows = []
         for r in rows:
-            # Format nilai debit dan kredit agar bersih
             debit_val = r['Debit'].replace('0.00', '').strip()
             kredit_val = r['Kredit'].replace('0.00', '').strip()
 
