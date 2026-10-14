@@ -46,23 +46,23 @@ footer{visibility:hidden}
 ::-webkit-scrollbar-track{background:transparent}
 
 /* ---------- Hero ---------- */
-.hero{text-align:center;padding:1.2rem 0 .6rem}
+.hero{display:flex;flex-direction:column;align-items:center;text-align:center;width:100%;padding:1.2rem 0 .6rem}
 .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;
   border:1px solid var(--line);background:rgba(0,229,255,.07);
   font:600 .72rem 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--cyan)}
 .dot{width:8px;height:8px;border-radius:50%;background:#2cff9a;box-shadow:0 0 0 0 rgba(44,255,154,.7);animation:pulse 1.8s infinite}
 @keyframes pulse{70%{box-shadow:0 0 0 10px rgba(44,255,154,0)}100%{box-shadow:0 0 0 0 rgba(44,255,154,0)}}
-.hero-title{font-family:'Orbitron',sans-serif;font-weight:900;margin:.9rem 0 .4rem;
+.hero .hero-title{width:100%;text-align:center;font-family:'Orbitron',sans-serif;font-weight:900;margin:.9rem 0 .4rem;
   font-size:clamp(1.9rem,5vw,3.4rem);letter-spacing:.04em;line-height:1.1;color:#fff}
 .hero-title span{background:linear-gradient(90deg,var(--cyan),var(--violet) 55%,var(--pink));
   -webkit-background-clip:text;background-clip:text;color:transparent;
   filter:drop-shadow(0 0 18px rgba(0,229,255,.35))}
-.hero-sub{max-width:640px;margin:0 auto;color:var(--muted);font-size:1.02rem;line-height:1.6}
+.hero .hero-sub{max-width:640px;width:100%;margin:0!important;text-align:center;color:var(--muted);font-size:1.02rem;line-height:1.6}
 .chips{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:1.2rem}
 .chip{padding:6px 14px;border-radius:10px;font:500 .8rem 'JetBrains Mono',monospace;color:var(--text);
   background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.35);transition:.25s}
 .chip:hover{transform:translateY(-2px);border-color:var(--cyan);box-shadow:0 0 16px rgba(0,229,255,.35)}
-.hero-line{height:2px;margin:1.6rem auto 0;max-width:520px;border-radius:2px;
+.hero-line{height:2px;margin:1.6rem 0 0;width:100%;max-width:520px;border-radius:2px;
   background:linear-gradient(90deg,transparent,var(--cyan),var(--violet),transparent);
   background-size:200% 100%;animation:sweep 3s linear infinite}
 @keyframes sweep{to{background-position:-200% 0}}
