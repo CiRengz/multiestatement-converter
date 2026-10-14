@@ -4,9 +4,15 @@ import pandas as pd
 import re
 import io
 import csv
+import ui
 
-# Konfigurasi tampilan halaman web
-st.set_page_config(page_title="Konverter Rekening Koran ke Excel", page_icon="🏦", layout="wide")
+st.set_page_config(
+    page_title="e-Statement Converter",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+ui.inject_css()
 
 # --- GERBANG KEAMANAN (KATA SANDI) ---
 def check_password():
@@ -17,36 +23,33 @@ def check_password():
         else:
             st.session_state["password_correct"] = False
 
-    if "password_correct" not in st.session_state:
-        st.title("🔒 Akses Terbatas")
-        st.text_input("Masukkan kata sandi untuk menggunakan aplikasi ini:", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.title("🔒 Akses Terbatas")
-        st.text_input("Masukkan kata sandi untuk menggunakan aplikasi ini:", type="password", on_change=password_entered, key="password")
-        st.error("❌ Kata sandi salah. Silakan coba lagi.")
-        return False
-    return True
+    if st.session_state.get("password_correct"):
+        return True
+
+    ui.login_header()
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        st.text_input("Kata sandi", type="password", on_change=password_entered,
+                      key="password", placeholder="••••••••", label_visibility="collapsed")
+        if st.session_state.get("password_correct") is False:
+            st.error("❌ Kata sandi salah. Silakan coba lagi.")
+    return False
 
 if check_password():
-    st.title("🏦 Multi-Bank e-Statement to Excel Converter")
-    st.write("""
-    Konversi e-Statement PDF ke Excel untuk berbagai bank: **BCA, BRI, BNI, Mandiri Kopra, OCBC, Permata, Mekari (Jurnal)**.
-    Upload file PDF sesuai bank, sistem akan mengekstrak transaksi secara otomatis.
-    """)
+    ui.hero()
 
     # ========== PILIH BANK ==========
-    bank_option = st.selectbox(
-        "Pilih Bank / Sumber e-Statement",
-        ["BCA", "BRI", "BNI", "Mandiri Kopra", "OCBC NISP", "Permata", "Mekari (Jurnal)"]
-    )
+    ui.step_header(1, "PILIH SUMBER", "Tentukan bank atau sumber e-Statement")
+    bank_option = st.selectbox("Bank", ui.BANKS, label_visibility="collapsed")
 
+    ui.step_header(2, "UNGGAH FILE", f"Seret file PDF e-Statement {bank_option} ke area di bawah (boleh lebih dari satu)")
     uploaded_files = st.file_uploader(
         f"Upload file PDF e-Statement {bank_option}",
         type="pdf",
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        label_visibility="collapsed",
     )
-
+    
     # ========== HELPER FUNCTIONS ==========
     def is_date(text):
         """Detects dd/mm or dd/mm/yyyy date formats"""
@@ -1239,7 +1242,12 @@ if check_password():
         return df, account_no, account_name, period
 
     # ========== MAIN PROCESSING ==========
-    if uploaded_files and st.button("🚀 Proses Data Sekarang"):
+    ui.step_header(3, "PROSES & EKSTRAK", "Sistem membaca tabel transaksi lalu menyusunnya ke Excel")
+
+    if not uploaded_files:
+        ui.empty_state("Menunggu file… unggah PDF di <b>langkah 2</b> untuk mengaktifkan tombol proses.")
+
+    if uploaded_files and st.button("⚡ Proses Data Sekarang"):
         with st.spinner("Sedang membaca dan memproses PDF..."):
             parser_map = {
                 "BCA": parse_bca,
@@ -1283,12 +1291,8 @@ if check_password():
                     format_comma = workbook.add_format({'num_format': '#,##0.00'})
                     format_text = workbook.add_format({'num_format': '@'})
                     header_format = workbook.add_format({
-                        'bold': True,
-                        'bg_color': '#4472C4',
-                        'font_color': 'white',
-                        'border': 1,
-                        'text_wrap': True,
-                        'valign': 'vcenter'
+                        'bold': True, 'bg_color': '#4472C4', 'font_color': 'white',
+                        'border': 1, 'text_wrap': True, 'valign': 'vcenter'
                     })
 
                     for sheet_name, df in all_sheets.items():
@@ -1311,10 +1315,8 @@ if check_password():
 
                 st.success(f"✅ Berhasil mengekstrak {len(all_sheets)} sheet dari {len(uploaded_files)} file PDF {bank_option}.")
 
-                st.subheader("📊 Preview Data")
-                for sheet_name, df in all_sheets.items():
-                    with st.expander(f"📄 {sheet_name} ({len(df)} transaksi)"):
-                        st.dataframe(df, use_container_width=True)
+                ui.step_header(4, "HASIL & UNDUH", "Periksa ringkasan, pratinjau data, lalu unduh Excel")
+                ui.summary_cards(all_sheets, len(uploaded_files))
 
                 st.download_button(
                     label="📥 Unduh File Excel Sekarang",
@@ -1322,5 +1324,12 @@ if check_password():
                     file_name=output_filename,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+                for sheet_name, df in all_sheets.items():
+                    with st.expander(f"📄 {sheet_name} ({len(df)} transaksi)"):
+                        st.dataframe(df, use_container_width=True)
             else:
                 st.error(f"❌ Tidak dapat mendeteksi tabel transaksi dari file {bank_option} yang diunggah. Pastikan file PDF sesuai dengan format {bank_option}.")
+
+    ui.footer()
