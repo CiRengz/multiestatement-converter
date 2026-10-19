@@ -26,6 +26,7 @@ def check_password():
     if st.session_state.get("password_correct"):
         return True
 
+    ui.theme_picker()   
     ui.login_header()
     _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
@@ -36,6 +37,7 @@ def check_password():
     return False
 
 if check_password():
+    ui.theme_picker()
     ui.hero()
 
     # ========== PILIH BANK ==========
